@@ -1,411 +1,1027 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Y from 'yjs'
-import { Stage, Layer, Line, Circle, Text, Group } from 'react-konva'
+import { Stage, Layer, Rect, Text, Group, Ellipse, Image as KonvaImage, Line } from 'react-konva'
 import { nanoid } from 'nanoid'
 import { WebsocketProvider } from 'y-websocket'
-
-type Stroke = {
-  points: number[]
-  color: string
-  user: string
-}
-
-type AwarenessState = {
-  name: string
-  color: string
-  cursor?: { x: number; y: number } | null
-  draft?: { points: number[]; color: string } | null
-}
-
-function getQueryParam(name: string, defaultValue: string): string {
-  const params = new URLSearchParams(window.location.search)
-  return params.get(name) || defaultValue
-}
-
-function randomColor(seed?: string): string {
-  const base = seed
-    ? Array.from(seed).reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
-    : Math.floor(Math.random() * 360)
-  const hue = base % 360
-  return `hsl(${hue}, 80%, 45%)`
-}
-
-function loadOrCreate<T>(key: string, create: () => T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    if (raw) return JSON.parse(raw) as T
-  } catch {}
-  const value = create()
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {}
-  return value
-}
+import { getQueryParam, loadOrCreate, randomColor } from './utils'
+import Modal from './components/Modal'
+import useImage from 'use-image'
 
 export default function App() {
-  const room = useMemo(() => getQueryParam('room', 'public'), [])
+  const room = useMemo(() => getQueryParam('room', 'public2'), [])
+  const [fishImage] = useImage('/fish.png')
 
   const [userName, setUserName] = useState(
-    loadOrCreate<string>('wb:name', () => `user-${nanoid(4)}`)
+    loadOrCreate<string>('fish:name', () => `user-${nanoid(4)}`)
   )
-  const [userColor] = useState(
-    loadOrCreate<string>('wb:color', () => randomColor(nanoid(6)))
+
+  const [myColor, setMyColor] = useState(
+    loadOrCreate<string>('fish:color', () => randomColor())
   )
 
   useEffect(() => {
     try {
-      localStorage.setItem('wb:name', JSON.stringify(userName))
-    } catch {}
+      localStorage.setItem('fish:name', JSON.stringify(userName))
+    } catch { }
   }, [userName])
 
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const [stageSize, setStageSize] = useState({ width: window.innerWidth, height: window.innerHeight - 56 })
+  useEffect(() => {
+    try {
+      localStorage.setItem('fish:color', JSON.stringify(myColor))
+    } catch { }
+  }, [myColor])
+
+  const [stageSize, setStageSize] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight - 64
+  })
+
+  const [showDrawingModal, setShowDrawingModal] = useState(false)
+  const lastActivityRef = useRef<number>(Date.now())
+  const inactivityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [isRendering, setIsRendering] = useState(false)
+  const [animationEnabled, setAnimationEnabled] = useState(true)
+  const [wavePhase, setWavePhase] = useState(0)
+  const [bubblePhase, setBubblePhase] = useState(0)
 
   useEffect(() => {
-    function onResize() {
-      setStageSize({ width: window.innerWidth, height: window.innerHeight - 56 })
+    if (userName && myColor) {
+      setShowDrawingModal(false)
+    }
+    setIsRendering(true)
+  }, [])
+
+  // Very slow animation update - every 200ms for very slow movement
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (animationEnabled) {
+        setWavePhase(prev => prev + 0.025)
+        setBubblePhase(prev => prev + 0.01)
+      }
+    }, 2000) // Update every 200ms for very slow animation
+
+    return () => clearInterval(interval)
+  }, [animationEnabled])
+
+  const handleChangeUserName = useCallback((name: string) => {
+    setUserName(name)
+  }, [])
+
+  const handleSaveSkin = useCallback((dataUrl: string) => {
+    const arr = fishArrayRef.current
+    const id = myFishIdRef.current
+    if (!arr || !id) return
+    const items = arr.toArray()
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].id === id) {
+        const next: Fish = { ...items[i], skin: dataUrl }
+        arr.delete(i, 1)
+        arr.insert(i, [next])
+        break
+      }
+    }
+    setShowDrawingModal(false)
+  }, [])
+
+  useEffect(() => {
+    const onResize = () => {
+      setStageSize({ width: window.innerWidth, height: window.innerHeight - 64 })
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const ydocRef = useRef<Y.Doc>(null)
-  const providerRef = useRef<WebsocketProvider>(null)
-  const strokesYArrayRef = useRef<Y.Array<Stroke>>(null)
-  const [strokes, setStrokes] = useState<Stroke[]>([])
+  const ydocRef = useRef<Y.Doc | null>(null)
+  const providerRef = useRef<WebsocketProvider | null>(null)
+  const fishArrayRef = useRef<Y.Array<Fish> | null>(null)
+  const foodMapRef = useRef<Y.Map<Food> | null>(null)
+  const scoresArrayRef = useRef<Y.Array<Score> | null>(null)
 
-  const [isDrawing, setIsDrawing] = useState(false)
-  const [draftPoints, setDraftPoints] = useState<number[]>([])
+  const [fishes, setFishes] = useState<Fish[]>([])
+  const [food, setFood] = useState<Food | null>(null)
+  const [scores, setScores] = useState<Score[]>([])
+  const myFishIdRef = useRef<string | null>(null)
+  const prevNameRef = useRef<string>(userName)
+  const renderStateRef = useRef<Map<string, {
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    swimPhase: number;
+    swimAmplitude: number;
+    swimFrequency: number;
+    directionChangeTimer: number;
+    baseSpeed: number;
+    currentSpeed: number;
+    targetDx: number;
+    targetDy: number;
+  }>>(new Map())
+
+  const getStoredFishId = () => {
+    try {
+      return JSON.parse(localStorage.getItem('fish:id') || 'null') as string | null
+    } catch {
+      return null
+    }
+  }
+
+  const setStoredFishId = (id: string | null) => {
+    try {
+      if (id) localStorage.setItem('fish:id', JSON.stringify(id))
+      else localStorage.removeItem('fish:id')
+    } catch { }
+  }
+
+  const removeMyFish = useCallback(() => {
+    const arr = fishArrayRef.current
+    const id = myFishIdRef.current
+    if (!arr || !id) return
+    
+    const items = arr.toArray()
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].id === id) {
+        arr.delete(i, 1)
+        break
+      }
+    }
+    myFishIdRef.current = null
+    setStoredFishId(null)
+  }, [])
+
+  const updateActivity = useCallback(() => {
+    lastActivityRef.current = Date.now()
+    
+    if (inactivityTimeoutRef.current) {
+      clearTimeout(inactivityTimeoutRef.current)
+    }
+    
+    inactivityTimeoutRef.current = setTimeout(() => {
+      removeMyFish()
+    }, 300000) // Remove fish after 5 minutes of inactivity
+  }, [removeMyFish])
+
+  const clearAllData = useCallback(() => {
+    if (!window.confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
+      return
+    }
+    
+    const doc = ydocRef.current
+    if (!doc) return
+    
+    doc.transact(() => {
+      doc.destroy()
+    })
+  }, [])
+
+  const checkCollision = useCallback((fish: Fish, food: Food) => {
+    const distance = Math.sqrt(
+      Math.pow(fish.x - food.x, 2) + Math.pow(fish.y - food.y, 2)
+    )
+    return distance < (18 + food.radius) // fish radius + food radius
+  }, [])
+
+  const spawnFood = useCallback(() => {
+    const foodMap = foodMapRef.current
+    if (!foodMap) return
+
+    const width = Math.max(100, stageSize.width)
+    const height = Math.max(100, stageSize.height)
+    const radius = 8
+    const x = Math.random() * (width - radius * 2) + radius
+    const y = Math.random() * (height - radius * 2) + radius
+
+    const newFood: Food = {
+      id: nanoid(),
+      x,
+      y,
+      radius
+    }
+
+    foodMap.set('current', newFood)
+  }, [stageSize])
+
+  const handleFishEatFood = useCallback((fishId: string, fishOwner: string) => {
+    const scoresArray = scoresArrayRef.current
+    if (!scoresArray) return
+
+    const currentScores = scoresArray.toArray()
+    const existingScoreIndex = currentScores.findIndex(s => s.owner === fishOwner)
+    
+    if (existingScoreIndex >= 0) {
+      const updatedScore = { ...currentScores[existingScoreIndex], points: currentScores[existingScoreIndex].points + 1 }
+      scoresArray.delete(existingScoreIndex, 1)
+      scoresArray.insert(existingScoreIndex, [updatedScore])
+    } else {
+      scoresArray.push([{ owner: fishOwner, points: 1 }])
+    }
+
+    // Spawn new food
+    spawnFood()
+  }, [spawnFood])
+
+
+  const memoizedFishArray = useMemo(() => {
+    const uniqueFishes = new Set(fishes.map(f => f.id))
+    return Array.from(uniqueFishes).map(id => fishes.find(f => f.id === id)).filter(f => f !== undefined) as Fish[]
+  }, [fishes])
 
   useEffect(() => {
     const doc = new Y.Doc()
     const provider = new WebsocketProvider('ws://localhost:1234', room, doc)
+    const fishArray = doc.getArray<Fish>('fishes')
+    const foodMap = doc.getMap<Food>('food')
+    const scoresArray = doc.getArray<Score>('scores')
 
-
-    const strokesArray = doc.getArray<Stroke>('strokes')
     ydocRef.current = doc
     providerRef.current = provider
-    strokesYArrayRef.current = strokesArray
+    fishArrayRef.current = fishArray
+    foodMapRef.current = foodMap
+    scoresArrayRef.current = scoresArray
 
-    setStrokes(strokesArray.toArray())
+    const handleUpdate = (event: Y.YArrayEvent<Fish>) => {
+      const arrSnap = fishArray.toArray()
+      setFishes(arrSnap)
 
-    const updateHandler = () => {
-      setStrokes(strokesArray.toArray())
+      const ids = new Set(arrSnap.map(f => f.id))
+      const map = renderStateRef.current
+      for (const key of Array.from(map.keys())) {
+        if (!ids.has(key)) map.delete(key)
+      }
+
+      let index = 0
+      for (const d of event.changes.delta) {
+        if ((d as any).retain != null) {
+          index += (d as any).retain as number
+        }
+        if ((d as any).insert != null) {
+          const inserted = (d as any).insert as Fish[]
+          for (let i = 0; i < inserted.length; i++) {
+            const f = arrSnap[index + i]
+            if (f) {
+              map.set(f.id, {
+                x: f.x,
+                y: f.y,
+                dx: f.dx,
+                dy: f.dy,
+                swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+                swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+                swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+                directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+                baseSpeed: f.baseSpeed || 0.4 + Math.random() * 0.4,
+                currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+                targetDx: f.targetDx || f.dx,
+                targetDy: f.targetDy || f.dy
+              })
+            }
+          }
+          index += inserted.length
+        }
+      }
+      if (event.changes.delta.length === 0 && map.size === 0) {
+        for (const f of arrSnap) {
+          map.set(f.id, {
+            x: f.x,
+            y: f.y,
+            dx: f.dx,
+            dy: f.dy,
+            swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+            swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+            swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+            directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+            baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+            currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+            targetDx: f.targetDx || f.dx,
+            targetDy: f.targetDy || f.dy
+          })
+        }
+      }
     }
-    strokesArray.observe(updateHandler)
 
-    provider.awareness.setLocalStateField('user', { name: userName, color: userColor })
-    provider.awareness.setLocalStateField('cursor', null)
-    provider.awareness.setLocalStateField('draft', null)
+    const handleFoodUpdate = () => {
+      const currentFood = foodMap.get('current')
+      setFood(currentFood || null)
+    }
+
+    const handleScoresUpdate = () => {
+      const scoresSnap = scoresArray.toArray()
+      setScores(scoresSnap)
+    }
+
+    fishArray.observe(handleUpdate)
+    foodMap.observe(handleFoodUpdate)
+    scoresArray.observe(handleScoresUpdate)
+    
+    const initial = fishArray.toArray()
+    setFishes(initial)
+    
+    const initialFood = foodMap.get('current')
+    setFood(initialFood || null)
+    
+    const initialScores = scoresArray.toArray()
+    setScores(initialScores)
+    for (const f of initial) {
+      renderStateRef.current.set(f.id, {
+        x: f.x,
+        y: f.y,
+        dx: f.dx,
+        dy: f.dy,
+        swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+        swimAmplitude: f.swimAmplitude || 0.3 + Math.random() * 0.4,
+        swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+        directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+        baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+        currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+        targetDx: f.targetDx || f.dx,
+        targetDy: f.targetDy || f.dy
+      })
+    }
+
+    const ensureSingleOnSync = (isSynced: boolean) => {
+      if (!isSynced) return
+      doc.transact(() => {
+        const arr = fishArray
+        const list = arr.toArray()
+        const storedId = getStoredFishId()
+        // If stored id exists and is present, adopt it
+        if (storedId) {
+          const idx = list.findIndex(f => f.id === storedId)
+          if (idx >= 0) {
+            myFishIdRef.current = storedId
+            // unify owner/color on reconnect
+            const cur = arr.get(idx) as Fish
+            const desired = { ...cur, owner: userName, color: myColor }
+            if (cur.owner !== desired.owner || cur.color !== desired.color) {
+              arr.delete(idx, 1)
+              arr.insert(idx, [desired])
+            }
+          }
+        }
+        // Dedupe by owner; keep the first occurrence
+        const mineIdx: number[] = []
+        for (let i = 0; i < list.length; i++) if (list[i].owner === userName) mineIdx.push(i)
+        if (mineIdx.length === 0) {
+          const width = Math.max(100, stageSize.width)
+          const height = Math.max(100, stageSize.height)
+          const radius = 18
+          const startX = Math.random() * (width - radius * 2) + radius
+          const startY = Math.random() * (height - radius * 2) + radius
+          const baseSpeed = 0.4 + Math.random() * 0.4
+          const angle = Math.random() * Math.PI * 2
+          const dx = Math.cos(angle) * baseSpeed
+          const dy = Math.sin(angle) * baseSpeed
+          const id = nanoid()
+          myFishIdRef.current = id
+          setStoredFishId(id)
+          arr.push([{
+            id,
+            owner: userName,
+            color: myColor,
+            x: startX,
+            y: startY,
+            dx,
+            dy,
+            swimPhase: Math.random() * Math.PI * 2,
+            swimAmplitude: 0.1 + Math.random() * 0.2,
+            swimFrequency: 0.02 + Math.random() * 0.03,
+            directionChangeTimer: 120 + Math.random() * 180,
+            baseSpeed,
+            currentSpeed: baseSpeed,
+            targetDx: dx,
+            targetDy: dy
+          }])
+        } else {
+          const keepIdx = mineIdx[0]
+          for (let k = mineIdx.length - 1; k >= 1; k--) arr.delete(mineIdx[k], 1)
+          const keep = arr.get(keepIdx) as Fish
+          myFishIdRef.current = keep.id
+          setStoredFishId(keep.id)
+          if (keep.owner !== userName || keep.color !== myColor) {
+            const next = { ...keep, owner: userName, color: myColor }
+            arr.delete(keepIdx, 1)
+            arr.insert(keepIdx, [next])
+          }
+        }
+
+        // Spawn initial food if none exists
+        const currentFood = foodMap.get('current')
+        if (!currentFood) {
+          spawnFood()
+        }
+      })
+    }
+    provider.once('sync', ensureSingleOnSync)
+
+    const onUnload = () => {
+      removeMyFish()
+    }
+    
+    const onVisibilityChange = () => {
+      // Don't remove fish when tab becomes hidden - user might just switch tabs
+      // Only remove fish on actual page unload
+    }
+    
+    const onOnline = () => {
+      // User came back online, but fish was already removed
+      // The sync handler will create a new fish
+    }
+    
+    const onOffline = () => {
+      // Don't immediately remove fish on network loss - might be temporary
+      // Let the inactivity timer handle it instead
+    }
+    
+    const onUserActivity = () => {
+      updateActivity()
+    }
+
+    const onWindowFocus = () => {
+      // Reset activity when window regains focus
+      updateActivity()
+    }
+
+    const onWindowBlur = () => {
+      // Don't remove fish when window loses focus - user might just switch tabs
+    }
+
+    window.addEventListener('beforeunload', onUnload)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    window.addEventListener('focus', onWindowFocus)
+    window.addEventListener('blur', onWindowBlur)
+    window.addEventListener('mousemove', onUserActivity)
+    window.addEventListener('keydown', onUserActivity)
+    window.addEventListener('click', onUserActivity)
+    window.addEventListener('scroll', onUserActivity)
+    
+    // Initialize activity tracking
+    updateActivity()
+    
+    // Start heartbeat to keep fish alive
+    heartbeatIntervalRef.current = setInterval(() => {
+      updateActivity()
+    }, 60000) // Reset activity every minute
 
     return () => {
-      strokesArray.unobserve(updateHandler)
+      window.removeEventListener('beforeunload', onUnload)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+      window.removeEventListener('focus', onWindowFocus)
+      window.removeEventListener('blur', onWindowBlur)
+      window.removeEventListener('mousemove', onUserActivity)
+      window.removeEventListener('keydown', onUserActivity)
+      window.removeEventListener('click', onUserActivity)
+      window.removeEventListener('scroll', onUserActivity)
+      
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current)
+      }
+      
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current)
+      }
+      
+      fishArray.unobserve(handleUpdate)
+      foodMap.unobserve(handleFoodUpdate)
+      scoresArray.unobserve(handleScoresUpdate)
+      provider.off('sync', ensureSingleOnSync as any)
       provider.destroy()
       doc.destroy()
     }
-  }, [room])
+  }, [room, updateActivity, spawnFood])
 
   useEffect(() => {
-    const provider = providerRef.current
-    if (!provider) return
-    provider.awareness.setLocalStateField('user', { name: userName, color: userColor })
-  }, [userName, userColor])
-
-  const handleMouseDown = (e: any) => {
-    setIsDrawing(true)
-    const stage = e.target.getStage()
-    const pos = stage?.getPointerPosition()
-    if (!pos) return
-    const pts = [pos.x, pos.y]
-    setDraftPoints(pts)
-    providerRef.current?.awareness.setLocalStateField('draft', {
-      points: pts,
-      color: userColor
-    })
-  }
-
-  const handleMouseMove = (e: any) => {
-    const stage = e.target.getStage()
-    const pos = stage?.getPointerPosition()
-    if (pos) {
-      providerRef.current?.awareness.setLocalStateField('cursor', { x: pos.x, y: pos.y })
-    }
-    if (!isDrawing || !pos) return
-    setDraftPoints(prev => {
-      const next = prev.concat([pos.x, pos.y])
-      providerRef.current?.awareness.setLocalStateField('draft', {
-        points: next,
-        color: userColor
-      })
-      return next
-    })
-  }
-
-  const logStrokeData = async (stroke: Stroke) => {
-    try {
-      const logData = {
-        timestamp: new Date().toISOString(),
-        action: 'stroke_completed',
-        stroke: {
-          points: stroke.points,
-          color: stroke.color,
-          user: stroke.user,
-          pointCount: stroke.points.length / 2
-        },
-        documentState: {
-          totalStrokes: strokesYArrayRef.current?.length || 0,
-          room: room,
-          clientId: providerRef.current?.awareness.clientID
-        }
+    return () => {
+      if (inactivityTimeoutRef.current) {
+        clearTimeout(inactivityTimeoutRef.current)
       }
-      
-      console.log('=== Stroke Completed ===')
-      console.log(JSON.stringify(logData, null, 2))
-      console.log('========================')
-      
-      // Send to API server
-      await fetch('http://localhost:3000/log', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(logData)
-      }).catch(error => {
-        console.warn('Failed to send log to API server:', error)
-      })
-      
-    } catch (error) {
-      console.error('Error logging stroke data:', error)
-    }
-  }
-
-  const handleMouseUp = () => {
-    if (isDrawing && draftPoints.length >= 2) {
-      const stroke: Stroke = { points: draftPoints, color: userColor, user: userName }
-      const yarr = strokesYArrayRef.current
-      if (yarr) {
-        yarr.push([stroke])
-        // Log the completed stroke
-        logStrokeData(stroke)
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current)
       }
+      removeMyFish()
     }
-    setIsDrawing(false)
-    setDraftPoints([])
-    providerRef.current?.awareness.setLocalStateField('draft', null)
-  }
+  }, [removeMyFish])
 
-  const logClearAction = async () => {
-    try {
-      const logData = {
-        timestamp: new Date().toISOString(),
-        action: 'canvas_cleared',
-        user: userName,
-        documentState: {
-          room: room,
-          clientId: providerRef.current?.awareness.clientID
-        }
-      }
-      
-      console.log('=== Canvas Cleared ===')
-      console.log(JSON.stringify(logData, null, 2))
-      console.log('=====================')
-      
-      await fetch('http://localhost:3000/log', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(logData)
-      }).catch(error => {
-        console.warn('Failed to send clear log to API server:', error)
-      })
-      
-    } catch (error) {
-      console.error('Error logging clear action:', error)
-    }
-  }
-
-  const handleClear = () => {
-    const yarr = strokesYArrayRef.current
-    if (!yarr) return
-    if (yarr.length > 0) {
-      yarr.delete(0, yarr.length)
-      // Log the clear action
-      logClearAction()
-    }
-  }
-
-  const [awarenessSeq, setAwarenessSeq] = useState(0)
   useEffect(() => {
-    const provider = providerRef.current
-    if (!provider) return
-    const onChange = () => setAwarenessSeq(s => s + 1)
-    provider.awareness.on('change', onChange)
-    return () => provider.awareness.off('change', onChange)
-  }, [])
-
-  const remoteStates = useMemo(() => {
-    const provider = providerRef.current
-    if (!provider) return [] as Array<{ id: number; state: AwarenessState }>
-    const states = Array.from(provider.awareness.getStates().entries()) as Array<[
-      number,
-      any
-    ]>
-    return states
-      .filter(([id]) => id !== provider.awareness.clientID)
-      .map(([id, raw]) => {
-        const name: string = raw?.user?.name ?? 'user'
-        const color: string = raw?.user?.color ?? '#000'
-        const cursor = raw?.cursor as AwarenessState['cursor']
-        const draft = raw?.draft as AwarenessState['draft']
-        return { id, state: { name, color, cursor, draft } }
-      })
-  }, [awarenessSeq])
-
-
-  // Periodic logging of document state
-  useEffect(() => {
-    const logPeriodicState = async () => {
-      try {
-        const logData = {
-          timestamp: new Date().toISOString(),
-          action: 'periodic_state_log',
-          documentState: {
-            totalStrokes: strokesYArrayRef.current?.length || 0,
-            room: room,
-            clientId: providerRef.current?.awareness.clientID,
-            userName: userName,
-            connectedUsers: remoteStates.length + 1
-          },
-          awareness: {
-            localUser: { name: userName, color: userColor },
-            remoteUsers: remoteStates.map(({ state }) => ({
-              name: state.name,
-              color: state.color,
-              hasCursor: !!state.cursor,
-              isDrawing: !!state.draft
-            }))
+    const arr = fishArrayRef.current
+    if (!arr) return
+    // Update existing fish with new owner, avoid creating new
+    const items = arr.toArray()
+    const myId = myFishIdRef.current || getStoredFishId()
+    if (myId) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].id === myId) {
+          const cur = items[i]
+          if (cur.owner !== userName) {
+            const next = { ...cur, owner: userName }
+            arr.delete(i, 1)
+            arr.insert(i, [next])
           }
+          myFishIdRef.current = myId
+          setStoredFishId(myId)
+          prevNameRef.current = userName
+          return
         }
-        
-        console.log('=== Periodic State Log ===')
-        console.log(JSON.stringify(logData, null, 2))
-        console.log('==========================')
-        
-        await fetch('http://localhost:3000/log', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(logData)
-        }).catch(error => {
-          console.warn('Failed to send periodic log to API server:', error)
-        })
-        
-      } catch (error) {
-        console.error('Error logging periodic state:', error)
       }
     }
+    // If we didn't find by id, dedupe by owner
+    const ownerIdx = items.findIndex(f => f.owner === userName)
+    if (ownerIdx >= 0) {
+      myFishIdRef.current = items[ownerIdx].id
+      setStoredFishId(items[ownerIdx].id)
+    }
+  }, [userName])
 
-    const interval = setInterval(logPeriodicState, 10000) // Every 10 seconds
-    return () => clearInterval(interval)
-  }, [room, userName, userColor, remoteStates])
+  useEffect(() => {
+    // open modal on first load if my fish has no skin
+    const arr = fishArrayRef.current
+    if (!arr) return
+    const id = myFishIdRef.current
+    if (!id) return
+    const items = arr.toArray()
+    const me = items.find(x => x.id === id)
+    if (me && !me.skin && !isRendering) setShowDrawingModal(true)
+  }, [fishes.length])
 
-  const toolbarHeight = 56
+
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const arr = fishArrayRef.current
+      const id = myFishIdRef.current
+      const local = renderStateRef.current
+      if (!arr || !local) return
+      const items = arr.toArray()
+      const width = Math.max(50, stageSize.width)
+      const height = Math.max(50, stageSize.height)
+      const radius = 18
+      let wroteMine = false
+      for (let i = 0; i < items.length; i++) {
+        const f = items[i]
+        const current = local.get(f.id) || {
+          x: f.x,
+          y: f.y,
+          dx: f.dx,
+          dy: f.dy,
+          swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+          swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+          swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+          directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+          baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+          currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+          targetDx: f.targetDx || f.dx,
+          targetDy: f.targetDy || f.dy
+        }
+
+        let { x, y, dx, dy, swimPhase, swimAmplitude, swimFrequency, directionChangeTimer, baseSpeed, currentSpeed, targetDx, targetDy } = current
+
+        // Update swim phase for sinusoidal movement
+        swimPhase += swimFrequency
+
+        // Decrease direction change timer
+        directionChangeTimer--
+
+        // Check if it's time to change direction
+        if (directionChangeTimer <= 0) {
+          // Fish tend to swim straight more often, with occasional direction changes
+          const randomValue = Math.random()
+          if (randomValue < 0.3) {
+            // 30% chance: continue straight (no change)
+            targetDx = dx
+            targetDy = dy
+          } else if (randomValue < 0.7) {
+            // 40% chance: reverse direction (swim back)
+            targetDx = -dx
+            targetDy = -dy
+          } else {
+            // 30% chance: slight turn (±30 degrees instead of ±45)
+            const changeAngle = (Math.random() - 0.5) * Math.PI * 0.33
+            const currentAngle = Math.atan2(dy, dx)
+            const newAngle = currentAngle + changeAngle
+            targetDx = Math.cos(newAngle) * baseSpeed
+            targetDy = Math.sin(newAngle) * baseSpeed
+          }
+          directionChangeTimer = 300 + Math.random() * 400 // Longer straight swimming periods
+        }
+
+        // Gradually adjust current direction towards target direction
+        const turnSpeed = 0.02
+        dx += (targetDx - dx) * turnSpeed
+        dy += (targetDy - dy) * turnSpeed
+
+        // Add subtle sinusoidal swimming motion perpendicular to movement direction
+        const movementAngle = Math.atan2(dy, dx)
+        const perpendicularAngle = movementAngle + Math.PI / 2
+        const waveOffsetX = Math.cos(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
+        const waveOffsetY = Math.sin(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
+
+        // Add subtle speed variation for more natural movement
+        const speedVariation = 0.9 + 0.2 * Math.sin(swimPhase * 1.5)
+        currentSpeed = baseSpeed * speedVariation
+
+        // Apply movement
+        x += dx * currentSpeed + waveOffsetX
+        y += dy * currentSpeed + waveOffsetY
+
+        // Smooth wall bouncing with more predictable direction changes
+        if (x < radius) {
+          x = radius
+          // Bounce off left wall - reverse X direction, keep Y direction
+          if (Math.random() < 0.7) {
+            targetDx = Math.abs(dx)
+            targetDy = dy // Keep current Y direction
+          } else {
+            targetDx = Math.abs(dx) + Math.random() * 0.2
+            targetDy = dy
+          }
+          directionChangeTimer = 200 + Math.random() * 300
+        }
+        else if (x > width - radius) {
+          x = width - radius
+          if (Math.random() < 0.7) {
+            targetDx = -Math.abs(dx)
+            targetDy = dy // Keep current Y direction
+          } else {
+            targetDx = -Math.abs(dx) - Math.random() * 0.2
+            targetDy = dy
+          }
+          directionChangeTimer = 200 + Math.random() * 300
+        }
+
+        if (y < radius) {
+          y = radius
+          if (Math.random() < 0.7) {
+            targetDx = dx // Keep current X direction
+            targetDy = Math.abs(dy)
+          } else {
+            targetDx = dx
+            targetDy = Math.abs(dy) + Math.random() * 0.2
+          }
+          directionChangeTimer = 200 + Math.random() * 300
+        }
+        else if (y > height - radius) {
+          y = height - radius
+          if (Math.random() < 0.7) {
+            targetDx = dx // Keep current X direction
+            targetDy = -Math.abs(dy)
+          } else {
+            targetDx = dx
+            targetDy = -Math.abs(dy) - Math.random() * 0.2
+          }
+          directionChangeTimer = 200 + Math.random() * 300
+        }
+
+        local.set(f.id, {
+          x,
+          y,
+          dx,
+          dy,
+          swimPhase,
+          swimAmplitude,
+          swimFrequency,
+          directionChangeTimer,
+          baseSpeed,
+          currentSpeed,
+          targetDx,
+          targetDy
+        })
+
+        if (!wroteMine && id && f.id === id) {
+          const next = {
+            ...f,
+            x,
+            y,
+            dx,
+            dy,
+            swimPhase,
+            swimAmplitude,
+            swimFrequency,
+            directionChangeTimer,
+            baseSpeed,
+            currentSpeed,
+            targetDx,
+            targetDy
+          }
+          if (next.x !== f.x || next.y !== f.y || next.dx !== f.dx || next.dy !== f.dy ||
+            next.swimPhase !== f.swimPhase || next.swimAmplitude !== f.swimAmplitude ||
+            next.swimFrequency !== f.swimFrequency || next.directionChangeTimer !== f.directionChangeTimer ||
+            next.baseSpeed !== f.baseSpeed || next.currentSpeed !== f.currentSpeed ||
+            next.targetDx !== f.targetDx || next.targetDy !== f.targetDy) {
+            arr.delete(i, 1)
+            arr.insert(i, [next])
+          }
+          wroteMine = true
+        }
+
+        // Check collision with food
+        if (food && checkCollision(f, food)) {
+          handleFishEatFood(f.id, f.owner)
+        }
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [stageSize, food, checkCollision, handleFishEatFood])
+
+  const toolbarHeight = 64
+
+  const OceanBackground = useCallback(() => {
+    const width = stageSize.width
+    const height = stageSize.height
+    
+    // Generate seaweed positions - memoized to prevent rerender
+    const seaweedPositions = useMemo(() => {
+      const seaweeds = []
+      for (let i = 0; i < 8; i++) {
+        seaweeds.push({
+          x: (width / 8) * i + Math.random() * 50,
+          height: 60 + Math.random() * 80,
+          sway: Math.random() * Math.PI * 2
+        })
+      }
+      return seaweeds
+    }, [width])
+
+    // Generate bubble positions - memoized to prevent rerender
+    const bubblePositions = useMemo(() => {
+      const bubbles = []
+      for (let i = 0; i < 15; i++) {
+        bubbles.push({
+          x: Math.random() * width,
+          y: height - Math.random() * height * 0.3,
+          size: 2 + Math.random() * 4,
+        })
+      }
+      return bubbles
+    }, [width, height])
+
+    return (
+      <Group>
+        {/* Ocean gradient background */}
+        <Rect x={0} y={0} width={width} height={height} fill="#87CEEB" />
+        
+        {/* Sand bottom */}
+        <Rect 
+          x={0} 
+          y={height - 40} 
+          width={width} 
+          height={40} 
+          fill="#F4A460"
+        />
+        
+        {/* Sand texture */}
+        {Array.from({ length: 20 }, (_, i) => (
+          <Ellipse
+            key={i}
+            x={Math.random() * width}
+            y={height - 20 + Math.random() * 20}
+            radiusX={1 + Math.random() * 3}
+            radiusY={0.5 + Math.random() * 1}
+            fill="#DEB887"
+            opacity={0.6}
+          />
+        ))}
+        
+        {/* Seaweed */}
+        {seaweedPositions.map((seaweed, i) => (
+          <Group key={i} x={seaweed.x} y={height - 40}>
+            <Line
+              points={[
+                0, 0,
+                Math.sin(wavePhase * 0.1 + seaweed.sway) * 2, -seaweed.height * 0.3,
+                Math.sin(wavePhase * 0.1 + seaweed.sway + 0.5) * 3, -seaweed.height * 0.6,
+                Math.sin(wavePhase * 0.1 + seaweed.sway + 1) * 1.5, -seaweed.height
+              ]}
+              stroke="#228B22"
+              strokeWidth={3}
+              lineCap="round"
+            />
+            <Line
+              points={[
+                5, 0,
+                Math.sin(wavePhase * 0.1 + seaweed.sway + 0.3) * 1.5, -seaweed.height * 0.4,
+                Math.sin(wavePhase * 0.1 + seaweed.sway + 0.8) * 2, -seaweed.height * 0.7,
+                Math.sin(wavePhase * 0.1 + seaweed.sway + 1.2) * 1, -seaweed.height
+              ]}
+              stroke="#32CD32"
+              strokeWidth={2}
+              lineCap="round"
+            />
+          </Group>
+        ))}
+        
+        {/* Animated waves */}
+        {Array.from({ length: 3 }, (_, waveIndex) => (
+          <Line
+            key={waveIndex}
+            points={Array.from({ length: width / 10 }, (_, i) => {
+              const x = i * 10
+              const y = 20 + waveIndex * 15 + Math.sin((x * 0.01) + wavePhase * 0.1 + waveIndex) * 4
+              return [x, y]
+            }).flat()}
+            stroke="rgba(255, 255, 255, 0.6)"
+            strokeWidth={2 + waveIndex}
+            lineCap="round"
+          />
+        ))}
+        
+        {/* Floating bubbles */}
+        {bubblePositions.map((bubble, i) => (
+          <Group key={i}>
+            <Ellipse
+              x={bubble.x + Math.sin(bubblePhase * 0.1 + i) * 1}
+              y={bubble.y - (bubblePhase * 0.3 + i * 1) % (height + 50)}
+              radiusX={bubble.size}
+              radiusY={bubble.size}
+              fill="rgba(255, 255, 255, 0.3)"
+              stroke="rgba(255, 255, 255, 0.6)"
+              strokeWidth={0.5}
+            />
+            <Ellipse
+              x={bubble.x + Math.sin(bubblePhase * 0.1 + i) * 1 - bubble.size * 0.3}
+              y={bubble.y - (bubblePhase * 0.3 + i * 1) % (height + 50) - bubble.size * 0.3}
+              radiusX={bubble.size * 0.3}
+              radiusY={bubble.size * 0.3}
+              fill="rgba(255, 255, 255, 0.8)"
+            />
+          </Group>
+        ))}
+      </Group>
+    )
+  }, [stageSize, wavePhase, bubblePhase])
 
   return (
-    <div ref={containerRef} style={{ width: '100vw', height: '100vh', background: '#fff', color: '#111', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ height: toolbarHeight, borderBottom: '1px solid #e5e5e5', display: 'flex', alignItems: 'center', padding: '0 12px', gap: 12 }}>
-        <div style={{ fontWeight: 600 }}>Room: {room}</div>
-        <input
-          value={userName}
-          onChange={(e) => setUserName(e.target.value)}
-          placeholder="Your name"
-          style={{ border: '1px solid #ccc', padding: '6px 8px', borderRadius: 4, background: '#fff', color: '#111' }}
-        />
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 16, height: 16, borderRadius: 999, background: userColor, border: '1px solid #00000020' }} />
-          <span style={{ fontSize: 12, color: '#666' }}>You</span>
-      </div>
-        <button onClick={handleClear} style={{ marginLeft: 'auto', border: '1px solid #111', background: '#fff', color: '#111', padding: '8px 12px', borderRadius: 4 }}>
-          Clear
-        </button>
+    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ 
+        height: toolbarHeight, 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: 12, 
+        padding: '0 12px', 
+        background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)',
+        borderBottom: '2px solid #4a90e2',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
+      }}>
+        <div style={{ display: 'flex', gap: 12, flex: 1, flexWrap: 'wrap' }}>
+          {scores.map((score, index) => (
+            <div key={index} style={{ 
+              fontSize: 13, 
+              color: '#fff',
+              background: 'rgba(255,255,255,0.2)',
+              padding: '4px 8px',
+              borderRadius: 12,
+              fontWeight: 500,
+              textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+            }}>
+              🐠 {score.owner}: {score.points} điểm
+            </div>
+          ))}
+        </div>
+        <button onClick={() => setShowDrawingModal(true)} style={{ 
+          border: '2px solid #fff', 
+          background: 'rgba(255,255,255,0.2)', 
+          color: '#fff',
+          padding: '8px 16px', 
+          borderRadius: 20,
+          fontWeight: 500,
+          textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
+          cursor: 'pointer',
+          transition: 'all 0.3s ease'
+        }}>🎨 Vẽ Cá</button>
       </div>
       <div style={{ flex: 1 }}>
-        <Stage
-          width={stageSize.width}
-          height={stageSize.height}
-          onMouseDown={handleMouseDown}
-          onMousemove={handleMouseMove}
-          onMouseup={handleMouseUp}
-          style={{ cursor: 'crosshair', background: '#fff' }}
-        >
+        <Stage width={stageSize.width} height={stageSize.height} style={{ background: '#87CEEB' }}>
           <Layer>
-            {strokes.map((s, idx) => (
-              <Line
-                key={idx}
-                points={s.points}
-                stroke={s.color}
-                strokeWidth={3}
-                tension={0.4}
-                lineCap="round"
-                lineJoin="round"
-                globalCompositeOperation="source-over"
-              />
-            ))}
-
-            {draftPoints.length > 1 && (
-              <Line
-                points={draftPoints}
-                stroke={userColor}
-                strokeWidth={3}
-                tension={0.4}
-                lineCap="round"
-                lineJoin="round"
-                opacity={0.8}
-              />
-            )}
-
-            {remoteStates.map(({ id, state }) => (
-              <Group key={id}>
-                {state.draft?.points && state.draft.points.length > 1 && (
-                  <Line
-                    points={state.draft.points}
-                    stroke={state.draft.color}
-                    strokeWidth={3}
-                    tension={0.4}
-                    lineCap="round"
-                    lineJoin="round"
-                    opacity={0.6}
-                  />
-                )}
+            <OceanBackground />
+            {food && (
+              <Group x={food.x} y={food.y}>
+                <Ellipse
+                  x={0}
+                  y={0}
+                  radiusX={food.radius}
+                  radiusY={food.radius}
+                  fill="#FFD700"
+                  stroke="#FFA500"
+                  strokeWidth={2}
+                />
+                <Ellipse
+                  x={-food.radius * 0.3}
+                  y={-food.radius * 0.3}
+                  radiusX={food.radius * 0.3}
+                  radiusY={food.radius * 0.3}
+                  fill="#FFF"
+                  opacity={0.9}
+                />
+                <Ellipse
+                  x={food.radius * 0.2}
+                  y={-food.radius * 0.2}
+                  radiusX={food.radius * 0.15}
+                  radiusY={food.radius * 0.15}
+                  fill="#FFF"
+                  opacity={0.6}
+                />
               </Group>
-            ))}
-          </Layer>
+            )}
+            {memoizedFishArray.map((f) => {
+              const local = renderStateRef.current.get(f.id) || f
+              const hasSkin = Boolean(f.skin)
+              let img: HTMLImageElement | undefined
+              if (hasSkin && f.skin) {
+                const el = new window.Image()
+                el.src = f.skin
+                img = el
+              }
+              const rx = 22
+              const ry = 12
 
-          <Layer>
-            {remoteStates.map(({ id, state }) => {
-              if (!state.cursor) return null
-              const { x, y } = state.cursor
-              const name = state.name
-              const color = state.color
+              const rotation = Math.atan2(local.dy, local.dx) * (180 / Math.PI)
+
               return (
-                <Group key={`cursor-${id}`} x={x} y={y}>
-                  <Circle x={0} y={0} radius={4} fill={color} stroke="#00000020" strokeWidth={1} />
-                  <Text
-                    x={8}
-                    y={-8}
-                    text={name}
-                    fontSize={12}
-                    fill={'#111'}
-                    padding={2}
-                  />
+                <Group key={f.id} x={local.x} y={local.y} rotation={rotation}>
+                  {hasSkin && img ? (
+                    <KonvaImage
+                      image={img}
+                      x={-24}
+                      y={-24}
+                      width={48}
+                      height={48}
+                    />
+                  ) : (
+                    // <>
+                    //   <Ellipse
+                    //     x={0}
+                    //     y={0}
+                    //     radiusX={rx}
+                    //     radiusY={ry}
+                    //     fill={f.color}
+                    //     stroke="#0000001a"
+                    //     strokeWidth={1}
+                    //   />
+
+                    //   <Line
+                    //     points={[
+                    //       -rx, 0,
+                    //       -rx - 20, -15,
+                    //       -rx - 20, 15
+                    //     ]}
+                    //     closed
+                    //     fill={f.color}
+                    //     strokeWidth={0.5}
+                    //   />
+
+                    //   <Ellipse
+                    //     x={rx / 2}
+                    //     y={-ry / 3}
+                    //     radiusX={3}
+                    //     radiusY={3}
+                    //     fill="white"
+                    //     strokeWidth={0.5}
+                    //   />
+                    //   <Ellipse
+                    //     x={rx / 2}
+                    //     y={-ry / 3}
+                    //     radiusX={1.5}
+                    //     radiusY={1.5}
+                    //     fill="black"
+                    //   />
+
+                    //   <Ellipse
+                    //     x={rx / 2 + 5}
+                    //     y={ry / 4}
+                    //     radiusX={4}
+                    //     radiusY={1.5}
+                    //     fill="black"
+                    //     opacity={0.5}
+                    //   />
+                    // </>
+                    <KonvaImage
+                      x={-24}
+                      y={-24}
+                      width={48}
+                      height={48}
+                      rotation={180}
+                      image={fishImage}
+                    />
+
+                  )}
+                  <Text x={-rx} y={-ry - 18} text={f.owner} fontSize={12} fill="#111" />
                 </Group>
               )
             })}
           </Layer>
         </Stage>
       </div>
+      <Modal
+        open={showDrawingModal}
+        onClose={() => setShowDrawingModal(false)}
+        onSave={handleSaveSkin}
+        userName={userName}
+        onChangeUserName={handleChangeUserName}
+      />
     </div>
   )
 }
+

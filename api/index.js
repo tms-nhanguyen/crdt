@@ -1,28 +1,42 @@
 import express from 'express'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
+import WebSocket from 'ws'
+import fs from 'fs'
+import db from './db.json' assert { type: 'json' }
+global.WebSocket = WebSocket
 
 const app = express()
 
 app.use(express.json())
 
 const doc = new Y.Doc();
-const yArray = doc.getArray('shared-array')
+const yArray = doc.getArray('strokes')
 
 let provider = null
-const LOG_INTERVAL = 3000
+
+function clearAllData() {
+  doc.destroy()
+  yArray.delete(0, yArray.length)
+  yArray.insert(0, db.strokes)
+  console.log('Cleared all data')
+  console.log(doc.isDestroyed)
+}
 
 function connectWebSocketProvider() {
   try {
-    provider = new WebsocketProvider('ws://localhost:1234', 'api-logger', doc)
+    provider = new WebsocketProvider('ws://localhost:1234', 'public2', doc)
     
     provider.on('status', (event) => {
       console.log('WebsocketProvider status:', event.status)
     })
 
     provider.on('sync', (isSynced) => {
+      console.log('Document sync status:', isSynced)
       if (isSynced) {
         console.log('Document synced with y-websocket server')
+        console.log('Current strokes count after sync:', yArray.length)
+        console.log('Current strokes:', yArray.toArray())
       }
     })
 
@@ -34,10 +48,22 @@ function connectWebSocketProvider() {
       console.log('WebsocketProvider connection closed:', event)
     })
 
-    // Listen to document updates
+    // Listen to strokes array updates
+    yArray.observe((event) => {
+      console.log('=== Strokes Array Updated ===')
+      console.log('Added:', event.changes.added.size)
+      console.log('Deleted:', event.changes.deleted.size)
+      console.log('Current strokes count:', yArray.length)
+      console.log('Latest strokes:', yArray.toArray().slice(-3))
+      console.log('============================')
+    })
+
     doc.on('update', (update, origin) => {
+      console.log('Document update received, origin:', origin === provider ? 'provider' : 'external')
+      console.log('Update size:', update.length, 'bytes')
       if (origin !== provider) {
-        console.log('Document updated from external source')
+        console.log('Document updated from external source (client)')
+        console.log('Current strokes after external update:', yArray.length)
       }
     })
 
@@ -46,54 +72,25 @@ function connectWebSocketProvider() {
   }
 }
 
-function logData() {
-  const data = {
-    timestamp: new Date().toISOString(),
-    documentSize: doc.getXmlFragment().length,
-    arrayLength: yArray.length,
-    arrayData: yArray.toArray(),
-    stateVector: Y.encodeStateVector(doc)
-  }
-  
-  console.log('=== CRDT Data Log ===')
-  console.log(JSON.stringify(data, null, 2))
-  console.log('====================')
-}
-
 app.get('/', (req, res) => {
   const update = Y.encodeStateAsUpdate(doc)
   res.send(update)
 })
 
 app.get('/data', (req, res) => {
-  const data = {
-    timestamp: new Date().toISOString(),
-    arrayData: yArray.toArray(),
-    documentSize: doc.getXmlFragment().length
-  }
+  const data = db
   res.json(data)
 })
 
-app.post('/log', (req, res) => {
-  try {
-    const logData = req.body
-    console.log('=== Client Log Received ===')
-    console.log(JSON.stringify(logData, null, 2))
-    console.log('===========================')
-    
-    res.json({ success: true, timestamp: new Date().toISOString() })
-  } catch (error) {
-    console.error('Error processing log:', error)
-    res.status(500).json({ success: false, error: error.message })
-  }
-})
+
+// app.post('/clear', (req, res) => {
+//   clearAllData()
+//   res.send('All data cleared')
+// })
 
 app.listen(3000, () => {
   console.log('API Server is running on port 3000')
   console.log('Connecting to y-websocket server...')
-  
+  clearAllData()
   connectWebSocketProvider()
-  
-  setInterval(logData, LOG_INTERVAL)
-  console.log(`Started periodic logging every ${LOG_INTERVAL}ms`)
 })

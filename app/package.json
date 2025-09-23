@@ -15,6 +15,7 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-konva": "^19.0.10",
+    "use-image": "^1.1.4",
     "y-indexeddb": "^9.0.12",
     "y-webrtc": "^10.3.0",
     "y-websocket": "^3.0.0",

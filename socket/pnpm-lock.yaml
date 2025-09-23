@@ -11,9 +11,6 @@ importers:
       '@y/websocket-server':
         specifier: ^0.1.1
         version: 0.1.1(yjs@13.6.27)
-      y-websocket:
-        specifier: ^3.0.0
-        version: 3.0.0(yjs@13.6.27)
 
 packages:
 
@@ -171,12 +168,6 @@ packages:
     engines: {node: '>=16.0.0', npm: '>=8.0.0'}
     peerDependencies:
       yjs: ^13.0.0
-
-  y-websocket@3.0.0:
-    resolution: {integrity: sha512-mUHy7AzkOZ834T/7piqtlA8Yk6AchqKqcrCXjKW8J1w2lPtRDjz8W5/CvXz9higKAHgKRKqpI3T33YkRFLkPtg==}
-    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
-    peerDependencies:
-      yjs: ^13.5.6
 
   yjs@13.6.27:
     resolution: {integrity: sha512-OIDwaflOaq4wC6YlPBy2L6ceKeKuF7DeTxx+jPzv1FHn9tCZ0ZwSRnUBxD05E3yed46fv/FWJbvR+Ud7x0L7zw==}
@@ -370,12 +361,6 @@ snapshots:
   y-protocols@1.0.6(yjs@13.6.27):
     dependencies:
       lib0: 0.2.114
-      yjs: 13.6.27
-
-  y-websocket@3.0.0(yjs@13.6.27):
-    dependencies:
-      lib0: 0.2.114
-      y-protocols: 1.0.6(yjs@13.6.27)
       yjs: 13.6.27
 
   yjs@13.6.27:
