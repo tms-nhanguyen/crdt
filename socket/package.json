@@ -4,12 +4,14 @@
     "main": "index.js",
     "type": "module",
     "scripts": {
-        "start": "npx y-websocket --port $PORT --host 0.0.0.0"
+        "start": "node index.js"
     },
     "author": "",
     "license": "ISC",
     "description": "",
     "dependencies": {
-        "@y/websocket-server": "^0.1.1"
+        "@y/websocket-server": "^0.1.1",
+        "express": "^5.1.0",
+        "express-ws": "^5.0.2"
     }
 }
