@@ -214,7 +214,7 @@ export default function App() {
 
   useEffect(() => {
     const doc = new Y.Doc()
-    const provider = new WebsocketProvider('ws://localhost:1234', room, doc)
+    const provider = new WebsocketProvider('ws://socket-three-black.vercel.app', room, doc)
     const fishArray = doc.getArray<Fish>('fishes')
     const foodMap = doc.getMap<Food>('food')
     const scoresArray = doc.getArray<Score>('scores')
