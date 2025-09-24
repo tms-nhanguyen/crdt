@@ -4,7 +4,7 @@
     "main": "index.js",
     "type": "module",
     "scripts": {
-        "start": "npx y-websocket --port $PORT"
+        "start": "npx y-websocket --port $PORT --host 0.0.0.0"
     },
     "author": "",
     "license": "ISC",
