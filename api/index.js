@@ -2,8 +2,7 @@ import express from 'express'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import WebSocket from 'ws'
-import fs from 'fs'
-import db from './db.json' assert { type: 'json' }
+
 global.WebSocket = WebSocket
 
 const app = express()
@@ -14,14 +13,6 @@ const doc = new Y.Doc();
 const yArray = doc.getArray('strokes')
 
 let provider = null
-
-function clearAllData() {
-  doc.destroy()
-  yArray.delete(0, yArray.length)
-  yArray.insert(0, db.strokes)
-  console.log('Cleared all data')
-  console.log(doc.isDestroyed)
-}
 
 function connectWebSocketProvider() {
   try {
@@ -77,20 +68,8 @@ app.get('/', (req, res) => {
   res.send(update)
 })
 
-app.get('/data', (req, res) => {
-  const data = db
-  res.json(data)
-})
-
-
-// app.post('/clear', (req, res) => {
-//   clearAllData()
-//   res.send('All data cleared')
-// })
-
 app.listen(3000, () => {
   console.log('API Server is running on port 3000')
   console.log('Connecting to y-websocket server...')
-  clearAllData()
   connectWebSocketProvider()
 })

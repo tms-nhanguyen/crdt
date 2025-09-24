@@ -8,14 +8,14 @@ import Modal from './components/Modal'
 import useImage from 'use-image'
 
 export default function App() {
-  const room = useMemo(() => getQueryParam('room', 'public2'), [])
+  const room = useMemo(() => getQueryParam('room', 'public3'), [])
   const [fishImage] = useImage('/fish.png')
 
   const [userName, setUserName] = useState(
     loadOrCreate<string>('fish:name', () => `user-${nanoid(4)}`)
   )
 
-  const [myColor, setMyColor] = useState(
+  const [myColor] = useState(
     loadOrCreate<string>('fish:color', () => randomColor())
   )
 
@@ -41,7 +41,7 @@ export default function App() {
   const inactivityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [isRendering, setIsRendering] = useState(false)
-  const [animationEnabled, setAnimationEnabled] = useState(true)
+  const [animationEnabled] = useState(true)
   const [wavePhase, setWavePhase] = useState(0)
   const [bubblePhase, setBubblePhase] = useState(0)
 
@@ -52,14 +52,13 @@ export default function App() {
     setIsRendering(true)
   }, [])
 
-  // Very slow animation update - every 200ms for very slow movement
   useEffect(() => {
     const interval = setInterval(() => {
       if (animationEnabled) {
         setWavePhase(prev => prev + 0.025)
         setBubblePhase(prev => prev + 0.01)
       }
-    }, 2000) // Update every 200ms for very slow animation
+    }, 2000)
 
     return () => clearInterval(interval)
   }, [animationEnabled])
@@ -137,7 +136,7 @@ export default function App() {
     const arr = fishArrayRef.current
     const id = myFishIdRef.current
     if (!arr || !id) return
-    
+
     const items = arr.toArray()
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i].id === id) {
@@ -151,34 +150,21 @@ export default function App() {
 
   const updateActivity = useCallback(() => {
     lastActivityRef.current = Date.now()
-    
+
     if (inactivityTimeoutRef.current) {
       clearTimeout(inactivityTimeoutRef.current)
     }
-    
+
     inactivityTimeoutRef.current = setTimeout(() => {
       removeMyFish()
-    }, 300000) // Remove fish after 5 minutes of inactivity
+    }, 300000)
   }, [removeMyFish])
-
-  const clearAllData = useCallback(() => {
-    if (!window.confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
-      return
-    }
-    
-    const doc = ydocRef.current
-    if (!doc) return
-    
-    doc.transact(() => {
-      doc.destroy()
-    })
-  }, [])
 
   const checkCollision = useCallback((fish: Fish, food: Food) => {
     const distance = Math.sqrt(
       Math.pow(fish.x - food.x, 2) + Math.pow(fish.y - food.y, 2)
     )
-    return distance < (18 + food.radius) // fish radius + food radius
+    return distance < (18 + food.radius)
   }, [])
 
   const spawnFood = useCallback(() => {
@@ -201,13 +187,13 @@ export default function App() {
     foodMap.set('current', newFood)
   }, [stageSize])
 
-  const handleFishEatFood = useCallback((fishId: string, fishOwner: string) => {
+  const handleFishEatFood = useCallback((_fishId: string, fishOwner: string) => {
     const scoresArray = scoresArrayRef.current
     if (!scoresArray) return
 
     const currentScores = scoresArray.toArray()
     const existingScoreIndex = currentScores.findIndex(s => s.owner === fishOwner)
-    
+
     if (existingScoreIndex >= 0) {
       const updatedScore = { ...currentScores[existingScoreIndex], points: currentScores[existingScoreIndex].points + 1 }
       scoresArray.delete(existingScoreIndex, 1)
@@ -311,13 +297,13 @@ export default function App() {
     fishArray.observe(handleUpdate)
     foodMap.observe(handleFoodUpdate)
     scoresArray.observe(handleScoresUpdate)
-    
+
     const initial = fishArray.toArray()
     setFishes(initial)
-    
+
     const initialFood = foodMap.get('current')
     setFood(initialFood || null)
-    
+
     const initialScores = scoresArray.toArray()
     setScores(initialScores)
     for (const f of initial) {
@@ -343,12 +329,10 @@ export default function App() {
         const arr = fishArray
         const list = arr.toArray()
         const storedId = getStoredFishId()
-        // If stored id exists and is present, adopt it
         if (storedId) {
           const idx = list.findIndex(f => f.id === storedId)
           if (idx >= 0) {
             myFishIdRef.current = storedId
-            // unify owner/color on reconnect
             const cur = arr.get(idx) as Fish
             const desired = { ...cur, owner: userName, color: myColor }
             if (cur.owner !== desired.owner || cur.color !== desired.color) {
@@ -357,7 +341,6 @@ export default function App() {
             }
           }
         }
-        // Dedupe by owner; keep the first occurrence
         const mineIdx: number[] = []
         for (let i = 0; i < list.length; i++) if (list[i].owner === userName) mineIdx.push(i)
         if (mineIdx.length === 0) {
@@ -403,7 +386,6 @@ export default function App() {
           }
         }
 
-        // Spawn initial food if none exists
         const currentFood = foodMap.get('current')
         if (!currentFood) {
           spawnFood()
@@ -415,74 +397,44 @@ export default function App() {
     const onUnload = () => {
       removeMyFish()
     }
-    
-    const onVisibilityChange = () => {
-      // Don't remove fish when tab becomes hidden - user might just switch tabs
-      // Only remove fish on actual page unload
-    }
-    
-    const onOnline = () => {
-      // User came back online, but fish was already removed
-      // The sync handler will create a new fish
-    }
-    
-    const onOffline = () => {
-      // Don't immediately remove fish on network loss - might be temporary
-      // Let the inactivity timer handle it instead
-    }
-    
+
     const onUserActivity = () => {
       updateActivity()
     }
 
     const onWindowFocus = () => {
-      // Reset activity when window regains focus
       updateActivity()
     }
 
-    const onWindowBlur = () => {
-      // Don't remove fish when window loses focus - user might just switch tabs
-    }
-
     window.addEventListener('beforeunload', onUnload)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('online', onOnline)
-    window.addEventListener('offline', onOffline)
     window.addEventListener('focus', onWindowFocus)
-    window.addEventListener('blur', onWindowBlur)
     window.addEventListener('mousemove', onUserActivity)
     window.addEventListener('keydown', onUserActivity)
     window.addEventListener('click', onUserActivity)
     window.addEventListener('scroll', onUserActivity)
-    
-    // Initialize activity tracking
+
     updateActivity()
-    
-    // Start heartbeat to keep fish alive
+
     heartbeatIntervalRef.current = setInterval(() => {
       updateActivity()
-    }, 60000) // Reset activity every minute
+    }, 60000)
 
     return () => {
       window.removeEventListener('beforeunload', onUnload)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('online', onOnline)
-      window.removeEventListener('offline', onOffline)
       window.removeEventListener('focus', onWindowFocus)
-      window.removeEventListener('blur', onWindowBlur)
       window.removeEventListener('mousemove', onUserActivity)
       window.removeEventListener('keydown', onUserActivity)
       window.removeEventListener('click', onUserActivity)
       window.removeEventListener('scroll', onUserActivity)
-      
+
       if (inactivityTimeoutRef.current) {
         clearTimeout(inactivityTimeoutRef.current)
       }
-      
+
       if (heartbeatIntervalRef.current) {
         clearInterval(heartbeatIntervalRef.current)
       }
-      
+
       fishArray.unobserve(handleUpdate)
       foodMap.unobserve(handleFoodUpdate)
       scoresArray.unobserve(handleScoresUpdate)
@@ -507,7 +459,6 @@ export default function App() {
   useEffect(() => {
     const arr = fishArrayRef.current
     if (!arr) return
-    // Update existing fish with new owner, avoid creating new
     const items = arr.toArray()
     const myId = myFishIdRef.current || getStoredFishId()
     if (myId) {
@@ -526,7 +477,6 @@ export default function App() {
         }
       }
     }
-    // If we didn't find by id, dedupe by owner
     const ownerIdx = items.findIndex(f => f.owner === userName)
     if (ownerIdx >= 0) {
       myFishIdRef.current = items[ownerIdx].id
@@ -535,7 +485,6 @@ export default function App() {
   }, [userName])
 
   useEffect(() => {
-    // open modal on first load if my fish has no skin
     const arr = fishArrayRef.current
     if (!arr) return
     const id = myFishIdRef.current
@@ -578,61 +527,48 @@ export default function App() {
 
         let { x, y, dx, dy, swimPhase, swimAmplitude, swimFrequency, directionChangeTimer, baseSpeed, currentSpeed, targetDx, targetDy } = current
 
-        // Update swim phase for sinusoidal movement
         swimPhase += swimFrequency
 
-        // Decrease direction change timer
         directionChangeTimer--
 
-        // Check if it's time to change direction
         if (directionChangeTimer <= 0) {
-          // Fish tend to swim straight more often, with occasional direction changes
           const randomValue = Math.random()
           if (randomValue < 0.3) {
-            // 30% chance: continue straight (no change)
             targetDx = dx
             targetDy = dy
           } else if (randomValue < 0.7) {
-            // 40% chance: reverse direction (swim back)
             targetDx = -dx
             targetDy = -dy
           } else {
-            // 30% chance: slight turn (±30 degrees instead of ±45)
             const changeAngle = (Math.random() - 0.5) * Math.PI * 0.33
             const currentAngle = Math.atan2(dy, dx)
             const newAngle = currentAngle + changeAngle
             targetDx = Math.cos(newAngle) * baseSpeed
             targetDy = Math.sin(newAngle) * baseSpeed
           }
-          directionChangeTimer = 300 + Math.random() * 400 // Longer straight swimming periods
+          directionChangeTimer = 300 + Math.random() * 400
         }
 
-        // Gradually adjust current direction towards target direction
         const turnSpeed = 0.02
         dx += (targetDx - dx) * turnSpeed
         dy += (targetDy - dy) * turnSpeed
 
-        // Add subtle sinusoidal swimming motion perpendicular to movement direction
         const movementAngle = Math.atan2(dy, dx)
         const perpendicularAngle = movementAngle + Math.PI / 2
         const waveOffsetX = Math.cos(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
         const waveOffsetY = Math.sin(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
 
-        // Add subtle speed variation for more natural movement
         const speedVariation = 0.9 + 0.2 * Math.sin(swimPhase * 1.5)
         currentSpeed = baseSpeed * speedVariation
 
-        // Apply movement
         x += dx * currentSpeed + waveOffsetX
         y += dy * currentSpeed + waveOffsetY
 
-        // Smooth wall bouncing with more predictable direction changes
         if (x < radius) {
           x = radius
-          // Bounce off left wall - reverse X direction, keep Y direction
           if (Math.random() < 0.7) {
             targetDx = Math.abs(dx)
-            targetDy = dy // Keep current Y direction
+            targetDy = dy
           } else {
             targetDx = Math.abs(dx) + Math.random() * 0.2
             targetDy = dy
@@ -643,7 +579,7 @@ export default function App() {
           x = width - radius
           if (Math.random() < 0.7) {
             targetDx = -Math.abs(dx)
-            targetDy = dy // Keep current Y direction
+            targetDy = dy
           } else {
             targetDx = -Math.abs(dx) - Math.random() * 0.2
             targetDy = dy
@@ -654,7 +590,7 @@ export default function App() {
         if (y < radius) {
           y = radius
           if (Math.random() < 0.7) {
-            targetDx = dx // Keep current X direction
+            targetDx = dx
             targetDy = Math.abs(dy)
           } else {
             targetDx = dx
@@ -665,7 +601,7 @@ export default function App() {
         else if (y > height - radius) {
           y = height - radius
           if (Math.random() < 0.7) {
-            targetDx = dx // Keep current X direction
+            targetDx = dx
             targetDy = -Math.abs(dy)
           } else {
             targetDx = dx
@@ -716,7 +652,6 @@ export default function App() {
           wroteMine = true
         }
 
-        // Check collision with food
         if (food && checkCollision(f, food)) {
           handleFishEatFood(f.id, f.owner)
         }
@@ -731,8 +666,7 @@ export default function App() {
   const OceanBackground = useCallback(() => {
     const width = stageSize.width
     const height = stageSize.height
-    
-    // Generate seaweed positions - memoized to prevent rerender
+
     const seaweedPositions = useMemo(() => {
       const seaweeds = []
       for (let i = 0; i < 8; i++) {
@@ -745,7 +679,6 @@ export default function App() {
       return seaweeds
     }, [width])
 
-    // Generate bubble positions - memoized to prevent rerender
     const bubblePositions = useMemo(() => {
       const bubbles = []
       for (let i = 0; i < 15; i++) {
@@ -760,19 +693,16 @@ export default function App() {
 
     return (
       <Group>
-        {/* Ocean gradient background */}
         <Rect x={0} y={0} width={width} height={height} fill="#87CEEB" />
-        
-        {/* Sand bottom */}
-        <Rect 
-          x={0} 
-          y={height - 40} 
-          width={width} 
-          height={40} 
+
+        <Rect
+          x={0}
+          y={height - 40}
+          width={width}
+          height={40}
           fill="#F4A460"
         />
-        
-        {/* Sand texture */}
+
         {Array.from({ length: 20 }, (_, i) => (
           <Ellipse
             key={i}
@@ -784,8 +714,7 @@ export default function App() {
             opacity={0.6}
           />
         ))}
-        
-        {/* Seaweed */}
+
         {seaweedPositions.map((seaweed, i) => (
           <Group key={i} x={seaweed.x} y={height - 40}>
             <Line
@@ -812,8 +741,7 @@ export default function App() {
             />
           </Group>
         ))}
-        
-        {/* Animated waves */}
+
         {Array.from({ length: 3 }, (_, waveIndex) => (
           <Line
             key={waveIndex}
@@ -827,8 +755,7 @@ export default function App() {
             lineCap="round"
           />
         ))}
-        
-        {/* Floating bubbles */}
+
         {bubblePositions.map((bubble, i) => (
           <Group key={i}>
             <Ellipse
@@ -855,20 +782,20 @@ export default function App() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ 
-        height: toolbarHeight, 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: 12, 
-        padding: '0 12px', 
+      <div style={{
+        height: toolbarHeight,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '0 12px',
         background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)',
         borderBottom: '2px solid #4a90e2',
         boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
       }}>
         <div style={{ display: 'flex', gap: 12, flex: 1, flexWrap: 'wrap' }}>
           {scores.map((score, index) => (
-            <div key={index} style={{ 
-              fontSize: 13, 
+            <div key={index} style={{
+              fontSize: 13,
               color: '#fff',
               background: 'rgba(255,255,255,0.2)',
               padding: '4px 8px',
@@ -880,11 +807,11 @@ export default function App() {
             </div>
           ))}
         </div>
-        <button onClick={() => setShowDrawingModal(true)} style={{ 
-          border: '2px solid #fff', 
-          background: 'rgba(255,255,255,0.2)', 
+        <button onClick={() => setShowDrawingModal(true)} style={{
+          border: '2px solid #fff',
+          background: 'rgba(255,255,255,0.2)',
           color: '#fff',
-          padding: '8px 16px', 
+          padding: '8px 16px',
           borderRadius: 20,
           fontWeight: 500,
           textShadow: '1px 1px 2px rgba(0,0,0,0.5)',
@@ -950,53 +877,6 @@ export default function App() {
                       height={48}
                     />
                   ) : (
-                    // <>
-                    //   <Ellipse
-                    //     x={0}
-                    //     y={0}
-                    //     radiusX={rx}
-                    //     radiusY={ry}
-                    //     fill={f.color}
-                    //     stroke="#0000001a"
-                    //     strokeWidth={1}
-                    //   />
-
-                    //   <Line
-                    //     points={[
-                    //       -rx, 0,
-                    //       -rx - 20, -15,
-                    //       -rx - 20, 15
-                    //     ]}
-                    //     closed
-                    //     fill={f.color}
-                    //     strokeWidth={0.5}
-                    //   />
-
-                    //   <Ellipse
-                    //     x={rx / 2}
-                    //     y={-ry / 3}
-                    //     radiusX={3}
-                    //     radiusY={3}
-                    //     fill="white"
-                    //     strokeWidth={0.5}
-                    //   />
-                    //   <Ellipse
-                    //     x={rx / 2}
-                    //     y={-ry / 3}
-                    //     radiusX={1.5}
-                    //     radiusY={1.5}
-                    //     fill="black"
-                    //   />
-
-                    //   <Ellipse
-                    //     x={rx / 2 + 5}
-                    //     y={ry / 4}
-                    //     radiusX={4}
-                    //     radiusY={1.5}
-                    //     fill="black"
-                    //     opacity={0.5}
-                    //   />
-                    // </>
                     <KonvaImage
                       x={-24}
                       y={-24}
@@ -1024,4 +904,3 @@ export default function App() {
     </div>
   )
 }
-
