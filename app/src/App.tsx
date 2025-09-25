@@ -245,9 +245,26 @@ export default function App() {
 
     const handleUpdate = (event: Y.YArrayEvent<Fish>) => {
       const arrSnap = fishArray.toArray()
-      setFishes(arrSnap)
+      
+      // Remove duplicate users by ID - keep the latest one
+      const uniqueFishes = new Map<string, Fish>()
+      for (const fish of arrSnap) {
+        if (!uniqueFishes.has(fish.id) || fish.owner === userName) {
+          uniqueFishes.set(fish.id, fish)
+        }
+      }
+      
+      // Update the array with unique fishes
+      const uniqueFishArray = Array.from(uniqueFishes.values())
+      if (uniqueFishArray.length !== arrSnap.length) {
+        fishArray.delete(0, arrSnap.length)
+        fishArray.insert(0, uniqueFishArray)
+        return
+      }
+      
+      setFishes(uniqueFishArray)
 
-      const ids = new Set(arrSnap.map(f => f.id))
+      const ids = new Set(uniqueFishArray.map(f => f.id))
       const map = renderStateRef.current
       const initializedSet = renderStateInitializedRef.current
       for (const key of Array.from(map.keys())) {
@@ -265,7 +282,7 @@ export default function App() {
         if ((d as any).insert != null) {
           const inserted = (d as any).insert as Fish[]
           for (let i = 0; i < inserted.length; i++) {
-            const f = arrSnap[index + i]
+            const f = uniqueFishArray[index + i]
             if (f) {
               const existingState = map.get(f.id)
               if (!existingState) {
@@ -309,7 +326,7 @@ export default function App() {
         }
       }
       if (event.changes.delta.length === 0 && map.size === 0) {
-        for (const f of arrSnap) {
+        for (const f of uniqueFishArray) {
           const existingState = map.get(f.id)
           if (!existingState) {
             const swimmingStyle = f.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
@@ -399,12 +416,28 @@ export default function App() {
       doc.transact(() => {
         const arr = fishArray
         const list = arr.toArray()
+        
+        // Remove duplicate users by ID - keep the latest one
+        const uniqueFishes = new Map<string, Fish>()
+        for (const fish of list) {
+          if (!uniqueFishes.has(fish.id) || fish.owner === userName) {
+            uniqueFishes.set(fish.id, fish)
+          }
+        }
+        
+        // Update the array with unique fishes if duplicates found
+        const uniqueFishArray = Array.from(uniqueFishes.values())
+        if (uniqueFishArray.length !== list.length) {
+          arr.delete(0, list.length)
+          arr.insert(0, uniqueFishArray)
+        }
+        
         const storedId = getStoredFishId()
         if (storedId) {
-          const idx = list.findIndex(f => f.id === storedId)
+          const idx = uniqueFishArray.findIndex(f => f.id === storedId)
           if (idx >= 0) {
             myFishIdRef.current = storedId
-            const cur = arr.get(idx) as Fish
+            const cur = uniqueFishArray[idx]
             
             const existingState = renderStateRef.current.get(cur.id)
             if (!existingState) {
@@ -463,7 +496,7 @@ export default function App() {
           }
         }
         const mineIdx: number[] = []
-        for (let i = 0; i < list.length; i++) if (list[i].owner === userName) mineIdx.push(i)
+        for (let i = 0; i < uniqueFishArray.length; i++) if (uniqueFishArray[i].owner === userName) mineIdx.push(i)
         if (mineIdx.length === 0) {
           const width = Math.max(100, stageSize.width)
           const height = Math.max(100, stageSize.height)
@@ -526,8 +559,12 @@ export default function App() {
           renderStateInitializedRef.current.add(id)
         } else {
           const keepIdx = mineIdx[0]
-          for (let k = mineIdx.length - 1; k >= 1; k--) arr.delete(mineIdx[k], 1)
-          const keep = arr.get(keepIdx) as Fish
+          for (let k = mineIdx.length - 1; k >= 1; k--) {
+            const fishToRemove = uniqueFishArray[mineIdx[k]]
+            const actualIdx = arr.toArray().findIndex(f => f.id === fishToRemove.id)
+            if (actualIdx >= 0) arr.delete(actualIdx, 1)
+          }
+          const keep = uniqueFishArray[keepIdx]
           myFishIdRef.current = keep.id
           setStoredFishId(keep.id)
           
@@ -576,8 +613,11 @@ export default function App() {
               targetDx: currentState?.targetDx ?? keep.targetDx,
               targetDy: currentState?.targetDy ?? keep.targetDy
             }
-            arr.delete(keepIdx, 1)
-            arr.insert(keepIdx, [next])
+            const actualIdx = arr.toArray().findIndex(f => f.id === keep.id)
+            if (actualIdx >= 0) {
+              arr.delete(actualIdx, 1)
+              arr.insert(actualIdx, [next])
+            }
           }
         }
 
@@ -658,11 +698,27 @@ export default function App() {
     const arr = fishArrayRef.current
     if (!arr) return
     const items = arr.toArray()
+    
+    // Remove duplicate users by ID - keep the latest one
+    const uniqueFishes = new Map<string, Fish>()
+    for (const fish of items) {
+      if (!uniqueFishes.has(fish.id) || fish.owner === userName) {
+        uniqueFishes.set(fish.id, fish)
+      }
+    }
+    
+    // Update the array with unique fishes if duplicates found
+    const uniqueFishArray = Array.from(uniqueFishes.values())
+    if (uniqueFishArray.length !== items.length) {
+      arr.delete(0, items.length)
+      arr.insert(0, uniqueFishArray)
+    }
+    
     const myId = myFishIdRef.current || getStoredFishId()
     if (myId) {
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].id === myId) {
-          const cur = items[i]
+      for (let i = 0; i < uniqueFishArray.length; i++) {
+        if (uniqueFishArray[i].id === myId) {
+          const cur = uniqueFishArray[i]
           if (cur.owner !== userName) {
             const currentState = renderStateRef.current.get(cur.id)
             const next = { 
@@ -687,8 +743,11 @@ export default function App() {
               sensingRange: currentState?.sensingRange ?? cur.sensingRange,
               foodSeekingTimer: currentState?.foodSeekingTimer ?? cur.foodSeekingTimer
             }
-            arr.delete(i, 1)
-            arr.insert(i, [next])
+            const actualIdx = arr.toArray().findIndex(f => f.id === cur.id)
+            if (actualIdx >= 0) {
+              arr.delete(actualIdx, 1)
+              arr.insert(actualIdx, [next])
+            }
           }
           myFishIdRef.current = myId
           setStoredFishId(myId)
@@ -697,10 +756,10 @@ export default function App() {
         }
       }
     }
-    const ownerIdx = items.findIndex(f => f.owner === userName)
+    const ownerIdx = uniqueFishArray.findIndex(f => f.owner === userName)
     if (ownerIdx >= 0) {
-      myFishIdRef.current = items[ownerIdx].id
-      setStoredFishId(items[ownerIdx].id)
+      myFishIdRef.current = uniqueFishArray[ownerIdx].id
+      setStoredFishId(uniqueFishArray[ownerIdx].id)
     }
   }, [userName])
 
