@@ -214,7 +214,7 @@ export default function App() {
 
   useEffect(() => {
     const doc = new Y.Doc()
-    const provider = new WebsocketProvider('wss://crdt-socket-production.up.railway.app', room, doc)
+    const provider = new WebsocketProvider('wss://crdt-production.up.railway.app', room, doc)
     const fishArray = doc.getArray<Fish>('fishes')
     const foodMap = doc.getMap<Food>('food')
     const scoresArray = doc.getArray<Score>('scores')
