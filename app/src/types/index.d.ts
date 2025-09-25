@@ -15,6 +15,12 @@ type Fish = {
     currentSpeed?: number
     targetDx?: number
     targetDy?: number
+    speedVariation?: number
+    speedBoostTimer?: number
+    swimmingStyle?: 'normal' | 'fast' | 'slow' | 'erratic'
+    foodAttraction?: boolean
+    sensingRange?: number
+    foodSeekingTimer?: number
 }
 
 type Food = {

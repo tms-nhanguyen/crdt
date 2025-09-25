@@ -102,6 +102,7 @@ export default function App() {
   const [scores, setScores] = useState<Score[]>([])
   const myFishIdRef = useRef<string | null>(null)
   const prevNameRef = useRef<string>(userName)
+  const eatenFoodRef = useRef<Set<string>>(new Set())
   const renderStateRef = useRef<Map<string, {
     x: number;
     y: number;
@@ -115,7 +116,15 @@ export default function App() {
     currentSpeed: number;
     targetDx: number;
     targetDy: number;
+    speedVariation: number;
+    speedBoostTimer: number;
+    swimmingStyle: 'normal' | 'fast' | 'slow' | 'erratic';
+    styleChangeTimer: number;
+    foodAttraction: boolean;
+    sensingRange: number;
+    foodSeekingTimer: number;
   }>>(new Map())
+  const renderStateInitializedRef = useRef<Set<string>>(new Set())
 
   const getStoredFishId = () => {
     try {
@@ -158,7 +167,7 @@ export default function App() {
     inactivityTimeoutRef.current = setTimeout(() => {
       removeMyFish()
     }, 300000)
-  }, [removeMyFish])
+  }, [])
 
   const checkCollision = useCallback((fish: Fish, food: Food) => {
     const distance = Math.sqrt(
@@ -171,8 +180,8 @@ export default function App() {
     const foodMap = foodMapRef.current
     if (!foodMap) return
 
-    const width = Math.max(100, stageSize.width)
-    const height = Math.max(100, stageSize.height)
+    const width = Math.max(100, window.innerWidth)
+    const height = Math.max(100, window.innerHeight - 64)
     const radius = 8
     const x = Math.random() * (width - radius * 2) + radius
     const y = Math.random() * (height - radius * 2) + radius
@@ -185,7 +194,8 @@ export default function App() {
     }
 
     foodMap.set('current', newFood)
-  }, [stageSize])
+    eatenFoodRef.current.clear()
+  }, [])
 
   const handleFishEatFood = useCallback((_fishId: string, fishOwner: string) => {
     const scoresArray = scoresArrayRef.current
@@ -219,11 +229,19 @@ export default function App() {
     const foodMap = doc.getMap<Food>('food')
     const scoresArray = doc.getArray<Score>('scores')
 
+    // Preserve existing render state
+    const preservedRenderState = new Map(renderStateRef.current)
+    const preservedInitializedSet = new Set(renderStateInitializedRef.current)
+
     ydocRef.current = doc
     providerRef.current = provider
     fishArrayRef.current = fishArray
     foodMapRef.current = foodMap
     scoresArrayRef.current = scoresArray
+
+    // Restore preserved render state
+    renderStateRef.current = preservedRenderState
+    renderStateInitializedRef.current = preservedInitializedSet
 
     const handleUpdate = (event: Y.YArrayEvent<Fish>) => {
       const arrSnap = fishArray.toArray()
@@ -231,8 +249,12 @@ export default function App() {
 
       const ids = new Set(arrSnap.map(f => f.id))
       const map = renderStateRef.current
+      const initializedSet = renderStateInitializedRef.current
       for (const key of Array.from(map.keys())) {
-        if (!ids.has(key)) map.delete(key)
+        if (!ids.has(key)) {
+          map.delete(key)
+          initializedSet.delete(key)
+        }
       }
 
       let index = 0
@@ -245,20 +267,42 @@ export default function App() {
           for (let i = 0; i < inserted.length; i++) {
             const f = arrSnap[index + i]
             if (f) {
-              map.set(f.id, {
-                x: f.x,
-                y: f.y,
-                dx: f.dx,
-                dy: f.dy,
-                swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
-                swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
-                swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
-                directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
-                baseSpeed: f.baseSpeed || 0.4 + Math.random() * 0.4,
-                currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
-                targetDx: f.targetDx || f.dx,
-                targetDy: f.targetDy || f.dy
-              })
+              const existingState = map.get(f.id)
+              if (!existingState) {
+                const swimmingStyle = f.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+                map.set(f.id, {
+                  x: f.x,
+                  y: f.y,
+                  dx: f.dx,
+                  dy: f.dy,
+                  swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+                  swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+                  swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+                  directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+                  baseSpeed: f.baseSpeed || 0.4 + Math.random() * 0.4,
+                  currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+                  targetDx: f.targetDx || f.dx,
+                  targetDy: f.targetDy || f.dy,
+                  speedVariation: f.speedVariation || 0.3 + Math.random() * 0.4,
+                  speedBoostTimer: f.speedBoostTimer || Math.random() * 300 + 200,
+                  swimmingStyle,
+                  styleChangeTimer: Math.random() * 600 + 400,
+                  foodAttraction: f.foodAttraction ?? true,
+                  sensingRange: f.sensingRange || 80 + Math.random() * 60,
+                  foodSeekingTimer: f.foodSeekingTimer || Math.random() * 200 + 100
+                })
+                renderStateInitializedRef.current.add(f.id)
+              } else {
+                const myFishId = myFishIdRef.current
+                if (f.id !== myFishId) {
+                  existingState.dx = f.dx
+                  existingState.dy = f.dy
+                  existingState.baseSpeed = f.baseSpeed || existingState.baseSpeed
+                  existingState.currentSpeed = f.currentSpeed || existingState.currentSpeed
+                  existingState.targetDx = f.targetDx || existingState.targetDx
+                  existingState.targetDy = f.targetDy || existingState.targetDy
+                }
+              }
             }
           }
           index += inserted.length
@@ -266,20 +310,32 @@ export default function App() {
       }
       if (event.changes.delta.length === 0 && map.size === 0) {
         for (const f of arrSnap) {
-          map.set(f.id, {
-            x: f.x,
-            y: f.y,
-            dx: f.dx,
-            dy: f.dy,
-            swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
-            swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
-            swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
-            directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
-            baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
-            currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
-            targetDx: f.targetDx || f.dx,
-            targetDy: f.targetDy || f.dy
-          })
+          const existingState = map.get(f.id)
+          if (!existingState) {
+            const swimmingStyle = f.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+            map.set(f.id, {
+              x: f.x,
+              y: f.y,
+              dx: f.dx,
+              dy: f.dy,
+              swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+              swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+              swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+              directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+              baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+              currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+              targetDx: f.targetDx || f.dx,
+              targetDy: f.targetDy || f.dy,
+              speedVariation: f.speedVariation || 0.3 + Math.random() * 0.4,
+              speedBoostTimer: f.speedBoostTimer || Math.random() * 300 + 200,
+              swimmingStyle,
+              styleChangeTimer: Math.random() * 600 + 400,
+              foodAttraction: f.foodAttraction ?? true,
+              sensingRange: f.sensingRange || 80 + Math.random() * 60,
+              foodSeekingTimer: f.foodSeekingTimer || Math.random() * 200 + 100
+            })
+            renderStateInitializedRef.current.add(f.id)
+          }
         }
       }
     }
@@ -287,6 +343,9 @@ export default function App() {
     const handleFoodUpdate = () => {
       const currentFood = foodMap.get('current')
       setFood(currentFood || null)
+      if (currentFood) {
+        eatenFoodRef.current.clear()
+      }
     }
 
     const handleScoresUpdate = () => {
@@ -307,20 +366,32 @@ export default function App() {
     const initialScores = scoresArray.toArray()
     setScores(initialScores)
     for (const f of initial) {
-      renderStateRef.current.set(f.id, {
-        x: f.x,
-        y: f.y,
-        dx: f.dx,
-        dy: f.dy,
-        swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
-        swimAmplitude: f.swimAmplitude || 0.3 + Math.random() * 0.4,
-        swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
-        directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
-        baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
-        currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
-        targetDx: f.targetDx || f.dx,
-        targetDy: f.targetDy || f.dy
-      })
+      const existingState = renderStateRef.current.get(f.id)
+      if (!existingState) {
+        const swimmingStyle = f.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+        renderStateRef.current.set(f.id, {
+          x: f.x,
+          y: f.y,
+          dx: f.dx,
+          dy: f.dy,
+          swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+          swimAmplitude: f.swimAmplitude || 0.3 + Math.random() * 0.4,
+          swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+          directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+          baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+          currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+          targetDx: f.targetDx || f.dx,
+          targetDy: f.targetDy || f.dy,
+          speedVariation: f.speedVariation || 0.3 + Math.random() * 0.4,
+          speedBoostTimer: f.speedBoostTimer || Math.random() * 300 + 200,
+          swimmingStyle,
+          styleChangeTimer: Math.random() * 600 + 400,
+          foodAttraction: f.foodAttraction ?? true,
+          sensingRange: f.sensingRange || 80 + Math.random() * 60,
+          foodSeekingTimer: f.foodSeekingTimer || Math.random() * 200 + 100
+        })
+        renderStateInitializedRef.current.add(f.id)
+      }
     }
 
     const ensureSingleOnSync = (isSynced: boolean) => {
@@ -334,7 +405,57 @@ export default function App() {
           if (idx >= 0) {
             myFishIdRef.current = storedId
             const cur = arr.get(idx) as Fish
-            const desired = { ...cur, owner: userName, color: myColor }
+            
+            const existingState = renderStateRef.current.get(cur.id)
+            if (!existingState) {
+              const swimmingStyle = cur.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+              renderStateRef.current.set(cur.id, {
+                x: cur.x,
+                y: cur.y,
+                dx: cur.dx,
+                dy: cur.dy,
+                swimPhase: cur.swimPhase || Math.random() * Math.PI * 2,
+                swimAmplitude: cur.swimAmplitude || 0.1 + Math.random() * 0.2,
+                swimFrequency: cur.swimFrequency || 0.02 + Math.random() * 0.03,
+                directionChangeTimer: cur.directionChangeTimer || 120 + Math.random() * 180,
+                baseSpeed: cur.baseSpeed || 0.4 + Math.random() * 0.4,
+                currentSpeed: cur.currentSpeed || cur.baseSpeed || 0.4 + Math.random() * 0.4,
+                targetDx: cur.targetDx || cur.dx,
+                targetDy: cur.targetDy || cur.dy,
+                speedVariation: cur.speedVariation || 0.3 + Math.random() * 0.4,
+                speedBoostTimer: cur.speedBoostTimer || Math.random() * 300 + 200,
+                swimmingStyle,
+                styleChangeTimer: Math.random() * 600 + 400,
+                foodAttraction: cur.foodAttraction ?? true,
+                sensingRange: cur.sensingRange || 80 + Math.random() * 60,
+                foodSeekingTimer: cur.foodSeekingTimer || Math.random() * 200 + 100
+              })
+            renderStateInitializedRef.current.add(cur.id)
+            }
+            const currentState = renderStateRef.current.get(cur.id)
+            const desired = { 
+              ...cur, 
+              owner: userName, 
+              color: myColor,
+              x: currentState?.x ?? cur.x,
+              y: currentState?.y ?? cur.y,
+              dx: currentState?.dx ?? cur.dx,
+              dy: currentState?.dy ?? cur.dy,
+              swimPhase: currentState?.swimPhase ?? cur.swimPhase,
+              swimAmplitude: currentState?.swimAmplitude ?? cur.swimAmplitude,
+              swimFrequency: currentState?.swimFrequency ?? cur.swimFrequency,
+              directionChangeTimer: currentState?.directionChangeTimer ?? cur.directionChangeTimer,
+              baseSpeed: currentState?.baseSpeed ?? cur.baseSpeed,
+              currentSpeed: currentState?.currentSpeed ?? cur.currentSpeed,
+              targetDx: currentState?.targetDx ?? cur.targetDx,
+              targetDy: currentState?.targetDy ?? cur.targetDy,
+              swimmingStyle: currentState?.swimmingStyle ?? cur.swimmingStyle,
+              speedVariation: currentState?.speedVariation ?? cur.speedVariation,
+              speedBoostTimer: currentState?.speedBoostTimer ?? cur.speedBoostTimer,
+              foodAttraction: currentState?.foodAttraction ?? cur.foodAttraction,
+              sensingRange: currentState?.sensingRange ?? cur.sensingRange,
+              foodSeekingTimer: currentState?.foodSeekingTimer ?? cur.foodSeekingTimer
+            }
             if (cur.owner !== desired.owner || cur.color !== desired.color) {
               arr.delete(idx, 1)
               arr.insert(idx, [desired])
@@ -346,9 +467,8 @@ export default function App() {
         if (mineIdx.length === 0) {
           const width = Math.max(100, stageSize.width)
           const height = Math.max(100, stageSize.height)
-          const radius = 18
-          const startX = Math.random() * (width - radius * 2) + radius
-          const startY = Math.random() * (height - radius * 2) + radius
+          const startX = width / 2
+          const startY = height / 2
           const baseSpeed = 0.4 + Math.random() * 0.4
           const angle = Math.random() * Math.PI * 2
           const dx = Math.cos(angle) * baseSpeed
@@ -356,7 +476,8 @@ export default function App() {
           const id = nanoid()
           myFishIdRef.current = id
           setStoredFishId(id)
-          arr.push([{
+          const swimmingStyle = ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+          const newFish = {
             id,
             owner: userName,
             color: myColor,
@@ -371,16 +492,90 @@ export default function App() {
             baseSpeed,
             currentSpeed: baseSpeed,
             targetDx: dx,
-            targetDy: dy
-          }])
+            targetDy: dy,
+            speedVariation: 0.3 + Math.random() * 0.4,
+            speedBoostTimer: Math.random() * 300 + 200,
+            swimmingStyle,
+            foodAttraction: true,
+            sensingRange: 80 + Math.random() * 60,
+            foodSeekingTimer: Math.random() * 200 + 100
+          }
+          arr.push([newFish])
+          
+          renderStateRef.current.set(id, {
+            x: startX,
+            y: startY,
+            dx,
+            dy,
+            swimPhase: newFish.swimPhase,
+            swimAmplitude: newFish.swimAmplitude,
+            swimFrequency: newFish.swimFrequency,
+            directionChangeTimer: newFish.directionChangeTimer,
+            baseSpeed,
+            currentSpeed: baseSpeed,
+            targetDx: dx,
+            targetDy: dy,
+            speedVariation: newFish.speedVariation,
+            speedBoostTimer: newFish.speedBoostTimer,
+            swimmingStyle: newFish.swimmingStyle,
+            styleChangeTimer: Math.random() * 600 + 400,
+            foodAttraction: newFish.foodAttraction,
+            sensingRange: newFish.sensingRange,
+            foodSeekingTimer: newFish.foodSeekingTimer
+          })
+          renderStateInitializedRef.current.add(id)
         } else {
           const keepIdx = mineIdx[0]
           for (let k = mineIdx.length - 1; k >= 1; k--) arr.delete(mineIdx[k], 1)
           const keep = arr.get(keepIdx) as Fish
           myFishIdRef.current = keep.id
           setStoredFishId(keep.id)
+          
+          const existingState = renderStateRef.current.get(keep.id)
+          if (!existingState) {
+            const swimmingStyle = keep.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+            renderStateRef.current.set(keep.id, {
+              x: keep.x,
+              y: keep.y,
+              dx: keep.dx,
+              dy: keep.dy,
+              swimPhase: keep.swimPhase || Math.random() * Math.PI * 2,
+              swimAmplitude: keep.swimAmplitude || 0.1 + Math.random() * 0.2,
+              swimFrequency: keep.swimFrequency || 0.02 + Math.random() * 0.03,
+              directionChangeTimer: keep.directionChangeTimer || 120 + Math.random() * 180,
+              baseSpeed: keep.baseSpeed || 0.4 + Math.random() * 0.4,
+              currentSpeed: keep.currentSpeed || keep.baseSpeed || 0.4 + Math.random() * 0.4,
+              targetDx: keep.targetDx || keep.dx,
+              targetDy: keep.targetDy || keep.dy,
+              speedVariation: keep.speedVariation || 0.3 + Math.random() * 0.4,
+              speedBoostTimer: keep.speedBoostTimer || Math.random() * 300 + 200,
+              swimmingStyle,
+              styleChangeTimer: Math.random() * 600 + 400,
+              foodAttraction: keep.foodAttraction ?? true,
+              sensingRange: keep.sensingRange || 80 + Math.random() * 60,
+              foodSeekingTimer: keep.foodSeekingTimer || Math.random() * 200 + 100
+            })
+            renderStateInitializedRef.current.add(keep.id)
+          }
           if (keep.owner !== userName || keep.color !== myColor) {
-            const next = { ...keep, owner: userName, color: myColor }
+            const currentState = renderStateRef.current.get(keep.id)
+            const next = { 
+              ...keep, 
+              owner: userName, 
+              color: myColor,
+              x: currentState?.x ?? keep.x,
+              y: currentState?.y ?? keep.y,
+              dx: currentState?.dx ?? keep.dx,
+              dy: currentState?.dy ?? keep.dy,
+              swimPhase: currentState?.swimPhase ?? keep.swimPhase,
+              swimAmplitude: currentState?.swimAmplitude ?? keep.swimAmplitude,
+              swimFrequency: currentState?.swimFrequency ?? keep.swimFrequency,
+              directionChangeTimer: currentState?.directionChangeTimer ?? keep.directionChangeTimer,
+              baseSpeed: currentState?.baseSpeed ?? keep.baseSpeed,
+              currentSpeed: currentState?.currentSpeed ?? keep.currentSpeed,
+              targetDx: currentState?.targetDx ?? keep.targetDx,
+              targetDy: currentState?.targetDy ?? keep.targetDy
+            }
             arr.delete(keepIdx, 1)
             arr.insert(keepIdx, [next])
           }
@@ -441,8 +636,11 @@ export default function App() {
       provider.off('sync', ensureSingleOnSync as any)
       provider.destroy()
       doc.destroy()
+
+      // Preserve render state for next initialization
+      // renderStateRef and renderStateInitializedRef will be preserved automatically
     }
-  }, [room, updateActivity, spawnFood])
+  }, [room])
 
   useEffect(() => {
     return () => {
@@ -466,7 +664,29 @@ export default function App() {
         if (items[i].id === myId) {
           const cur = items[i]
           if (cur.owner !== userName) {
-            const next = { ...cur, owner: userName }
+            const currentState = renderStateRef.current.get(cur.id)
+            const next = { 
+              ...cur, 
+              owner: userName,
+              x: currentState?.x ?? cur.x,
+              y: currentState?.y ?? cur.y,
+              dx: currentState?.dx ?? cur.dx,
+              dy: currentState?.dy ?? cur.dy,
+              swimPhase: currentState?.swimPhase ?? cur.swimPhase,
+              swimAmplitude: currentState?.swimAmplitude ?? cur.swimAmplitude,
+              swimFrequency: currentState?.swimFrequency ?? cur.swimFrequency,
+              directionChangeTimer: currentState?.directionChangeTimer ?? cur.directionChangeTimer,
+              baseSpeed: currentState?.baseSpeed ?? cur.baseSpeed,
+              currentSpeed: currentState?.currentSpeed ?? cur.currentSpeed,
+              targetDx: currentState?.targetDx ?? cur.targetDx,
+              targetDy: currentState?.targetDy ?? cur.targetDy,
+              swimmingStyle: currentState?.swimmingStyle ?? cur.swimmingStyle,
+              speedVariation: currentState?.speedVariation ?? cur.speedVariation,
+              speedBoostTimer: currentState?.speedBoostTimer ?? cur.speedBoostTimer,
+              foodAttraction: currentState?.foodAttraction ?? cur.foodAttraction,
+              sensingRange: currentState?.sensingRange ?? cur.sensingRange,
+              foodSeekingTimer: currentState?.foodSeekingTimer ?? cur.foodSeekingTimer
+            }
             arr.delete(i, 1)
             arr.insert(i, [next])
           }
@@ -510,46 +730,128 @@ export default function App() {
       let wroteMine = false
       for (let i = 0; i < items.length; i++) {
         const f = items[i]
-        const current = local.get(f.id) || {
-          x: f.x,
-          y: f.y,
-          dx: f.dx,
-          dy: f.dy,
-          swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
-          swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
-          swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
-          directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
-          baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
-          currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
-          targetDx: f.targetDx || f.dx,
-          targetDy: f.targetDy || f.dy
+        const current = local.get(f.id)
+        if (!current) {
+          if (!renderStateInitializedRef.current.has(f.id)) {
+            const swimmingStyle = f.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
+            local.set(f.id, {
+              x: f.x,
+              y: f.y,
+              dx: f.dx,
+              dy: f.dy,
+              swimPhase: f.swimPhase || Math.random() * Math.PI * 2,
+              swimAmplitude: f.swimAmplitude || 0.1 + Math.random() * 0.2,
+              swimFrequency: f.swimFrequency || 0.02 + Math.random() * 0.03,
+              directionChangeTimer: f.directionChangeTimer || 120 + Math.random() * 180,
+              baseSpeed: f.baseSpeed || 1.2 + Math.random() * 1.2,
+              currentSpeed: f.currentSpeed || f.baseSpeed || 1.2 + Math.random() * 1.2,
+              targetDx: f.targetDx || f.dx,
+              targetDy: f.targetDy || f.dy,
+              speedVariation: f.speedVariation || 0.3 + Math.random() * 0.4,
+              speedBoostTimer: f.speedBoostTimer || Math.random() * 300 + 200,
+              swimmingStyle,
+              styleChangeTimer: Math.random() * 600 + 400,
+              foodAttraction: f.foodAttraction ?? true,
+              sensingRange: f.sensingRange || 80 + Math.random() * 60,
+              foodSeekingTimer: f.foodSeekingTimer || Math.random() * 200 + 100
+            })
+            renderStateInitializedRef.current.add(f.id)
+          }
+          continue
         }
 
-        let { x, y, dx, dy, swimPhase, swimAmplitude, swimFrequency, directionChangeTimer, baseSpeed, currentSpeed, targetDx, targetDy } = current
+        let { x, y, dx, dy, swimPhase, swimAmplitude, swimFrequency, directionChangeTimer, baseSpeed, currentSpeed, targetDx, targetDy, speedVariation, speedBoostTimer, swimmingStyle, styleChangeTimer, foodAttraction, sensingRange, foodSeekingTimer } = current
 
         swimPhase += swimFrequency
 
         directionChangeTimer--
+        speedBoostTimer--
+        styleChangeTimer--
+        foodSeekingTimer--
+
+        // Swimming style changes
+        if (styleChangeTimer <= 0) {
+          const styles: ('normal' | 'fast' | 'slow' | 'erratic')[] = ['normal', 'fast', 'slow', 'erratic']
+          swimmingStyle = styles[Math.floor(Math.random() * styles.length)]
+          styleChangeTimer = Math.random() * 800 + 600
+        }
+
+        // Apply swimming style effects
+        let styleMultiplier = 1
+        let styleVariation = 0
+        switch (swimmingStyle) {
+          case 'fast':
+            styleMultiplier = 1.5
+            styleVariation = 0.2
+            break
+          case 'slow':
+            styleMultiplier = 0.6
+            styleVariation = 0.1
+            break
+          case 'erratic':
+            styleMultiplier = 1.2
+            styleVariation = 0.6
+            break
+          default:
+            styleMultiplier = 1
+            styleVariation = 0.3
+        }
+
+        // Speed boost events
+        if (speedBoostTimer <= 0) {
+          speedBoostTimer = Math.random() * 400 + 300
+          if (Math.random() < 0.3) {
+            speedVariation = Math.random() * 0.8 + 0.2
+          }
+        }
+
+        // Food attraction logic
+        if (foodAttraction && food && foodSeekingTimer <= 0) {
+          const distanceToFood = Math.sqrt(Math.pow(x - food.x, 2) + Math.pow(y - food.y, 2))
+          
+          if (distanceToFood <= sensingRange) {
+            // Calculate direction to food
+            const angleToFood = Math.atan2(food.y - y, food.x - x)
+            const attractionStrength = Math.max(0.1, 1 - (distanceToFood / sensingRange))
+            
+            // Blend current direction with food direction
+            const currentAngle = Math.atan2(dy, dx)
+            const blendAngle = currentAngle + (angleToFood - currentAngle) * attractionStrength * 0.3
+            
+            // Update target direction
+            targetDx = Math.cos(blendAngle) * baseSpeed
+            targetDy = Math.sin(blendAngle) * baseSpeed
+            
+            // Increase speed when seeking food
+            currentSpeed *= (1 + attractionStrength * 0.4)
+            
+            // Reset food seeking timer
+            foodSeekingTimer = 60 + Math.random() * 120
+          } else {
+            // Reset food seeking timer if no food in range
+            foodSeekingTimer = Math.random() * 200 + 100
+          }
+        }
 
         if (directionChangeTimer <= 0) {
           const randomValue = Math.random()
-          if (randomValue < 0.3) {
+          if (randomValue < 0.4) {
             targetDx = dx
             targetDy = dy
-          } else if (randomValue < 0.7) {
+          } else if (randomValue < 0.6) {
             targetDx = -dx
             targetDy = -dy
           } else {
-            const changeAngle = (Math.random() - 0.5) * Math.PI * 0.33
+            const changeAngle = (Math.random() - 0.5) * Math.PI * 0.5
             const currentAngle = Math.atan2(dy, dx)
             const newAngle = currentAngle + changeAngle
             targetDx = Math.cos(newAngle) * baseSpeed
             targetDy = Math.sin(newAngle) * baseSpeed
           }
-          directionChangeTimer = 300 + Math.random() * 400
+          directionChangeTimer = 180 + Math.random() * 240
         }
 
-        const turnSpeed = 0.02
+        const turnSpeed = 0.015
         dx += (targetDx - dx) * turnSpeed
         dy += (targetDy - dy) * turnSpeed
 
@@ -558,56 +860,47 @@ export default function App() {
         const waveOffsetX = Math.cos(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
         const waveOffsetY = Math.sin(perpendicularAngle) * Math.sin(swimPhase) * swimAmplitude * 0.5
 
-        const speedVariation = 0.9 + 0.2 * Math.sin(swimPhase * 1.5)
-        currentSpeed = baseSpeed * speedVariation
+        const naturalVariation = 0.9 + 0.2 * Math.sin(swimPhase * 1.5)
+        const randomVariation = 1 + (Math.random() - 0.5) * styleVariation
+        const boostVariation = 1 + Math.sin(swimPhase * 2) * speedVariation * 0.3
+        
+        currentSpeed = baseSpeed * styleMultiplier * naturalVariation * randomVariation * boostVariation
 
         x += dx * currentSpeed + waveOffsetX
         y += dy * currentSpeed + waveOffsetY
 
         if (x < radius) {
           x = radius
-          if (Math.random() < 0.7) {
-            targetDx = Math.abs(dx)
-            targetDy = dy
-          } else {
-            targetDx = Math.abs(dx) + Math.random() * 0.2
-            targetDy = dy
-          }
-          directionChangeTimer = 200 + Math.random() * 300
+          targetDx = Math.abs(dx) * 0.8
+          targetDy = dy * 0.8
+          directionChangeTimer = 120 + Math.random() * 180
         }
         else if (x > width - radius) {
           x = width - radius
-          if (Math.random() < 0.7) {
-            targetDx = -Math.abs(dx)
-            targetDy = dy
-          } else {
-            targetDx = -Math.abs(dx) - Math.random() * 0.2
-            targetDy = dy
-          }
-          directionChangeTimer = 200 + Math.random() * 300
+          targetDx = -Math.abs(dx) * 0.8
+          targetDy = dy * 0.8
+          directionChangeTimer = 120 + Math.random() * 180
         }
 
         if (y < radius) {
           y = radius
-          if (Math.random() < 0.7) {
-            targetDx = dx
-            targetDy = Math.abs(dy)
-          } else {
-            targetDx = dx
-            targetDy = Math.abs(dy) + Math.random() * 0.2
-          }
-          directionChangeTimer = 200 + Math.random() * 300
+          targetDx = dx * 0.8
+          targetDy = Math.abs(dy) * 0.8
+          directionChangeTimer = 120 + Math.random() * 180
         }
         else if (y > height - radius) {
           y = height - radius
-          if (Math.random() < 0.7) {
-            targetDx = dx
-            targetDy = -Math.abs(dy)
-          } else {
-            targetDx = dx
-            targetDy = -Math.abs(dy) - Math.random() * 0.2
-          }
-          directionChangeTimer = 200 + Math.random() * 300
+          targetDx = dx * 0.8
+          targetDy = -Math.abs(dy) * 0.8
+          directionChangeTimer = 120 + Math.random() * 180
+        }
+
+        const prevState = local.get(f.id)
+        const maxJumpDistance = 50
+        
+        if (prevState && Math.sqrt(Math.pow(x - prevState.x, 2) + Math.pow(y - prevState.y, 2)) > maxJumpDistance) {
+          x = prevState.x + dx * currentSpeed
+          y = prevState.y + dy * currentSpeed
         }
 
         local.set(f.id, {
@@ -622,7 +915,14 @@ export default function App() {
           baseSpeed,
           currentSpeed,
           targetDx,
-          targetDy
+          targetDy,
+          speedVariation,
+          speedBoostTimer,
+          swimmingStyle,
+          styleChangeTimer,
+          foodAttraction,
+          sensingRange,
+          foodSeekingTimer
         })
 
         if (!wroteMine && id && f.id === id) {
@@ -639,20 +939,33 @@ export default function App() {
             baseSpeed,
             currentSpeed,
             targetDx,
-            targetDy
+            targetDy,
+            speedVariation,
+            speedBoostTimer,
+            swimmingStyle,
+            foodAttraction,
+            sensingRange,
+            foodSeekingTimer
           }
-          if (next.x !== f.x || next.y !== f.y || next.dx !== f.dx || next.dy !== f.dy ||
+          const positionChanged = Math.abs(next.x - f.x) > 0.1 || Math.abs(next.y - f.y) > 0.1
+          const movementChanged = next.dx !== f.dx || next.dy !== f.dy ||
             next.swimPhase !== f.swimPhase || next.swimAmplitude !== f.swimAmplitude ||
             next.swimFrequency !== f.swimFrequency || next.directionChangeTimer !== f.directionChangeTimer ||
             next.baseSpeed !== f.baseSpeed || next.currentSpeed !== f.currentSpeed ||
-            next.targetDx !== f.targetDx || next.targetDy !== f.targetDy) {
+            next.targetDx !== f.targetDx || next.targetDy !== f.targetDy ||
+            next.speedVariation !== f.speedVariation || next.speedBoostTimer !== f.speedBoostTimer ||
+            next.swimmingStyle !== f.swimmingStyle || next.foodAttraction !== f.foodAttraction ||
+            next.sensingRange !== f.sensingRange || next.foodSeekingTimer !== f.foodSeekingTimer
+          
+          if (positionChanged || movementChanged) {
             arr.delete(i, 1)
             arr.insert(i, [next])
           }
           wroteMine = true
         }
 
-        if (food && checkCollision(f, food)) {
+        if (food && !eatenFoodRef.current.has(food.id) && checkCollision({ ...f, x, y }, food)) {
+          eatenFoodRef.current.add(food.id)
           handleFishEatFood(f.id, f.owner)
         }
       }
