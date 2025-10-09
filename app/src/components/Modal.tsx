@@ -12,7 +12,7 @@ type Tool = 'pen' | 'line' | 'rect' | 'ellipse' | 'eraser'
 
 const Modal = ({ open, onClose, onSave, userName, onChangeUserName }: ModalProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const [isDrawing] = useState(true)
+  const [isDrawing, setIsDrawing] = useState(false)
   const [lastPoint, setLastPoint] = useState<{ x: number; y: number } | null>(null)
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null)
   const [tool, setTool] = useState<Tool>('pen')
@@ -54,6 +54,7 @@ const Modal = ({ open, onClose, onSave, userName, onChangeUserName }: ModalProps
     const handleUpAnywhere = () => {
       if (!open) return
       if (!canvasRef.current) return
+      setIsDrawing(false)
       setLastPoint(null)
     }
     window.addEventListener('pointerup', handleUpAnywhere)
@@ -76,6 +77,7 @@ const Modal = ({ open, onClose, onSave, userName, onChangeUserName }: ModalProps
     if (!canvas) return
     canvas.setPointerCapture(evt.pointerId)
     const pt = getRelativePoint(evt)
+    setIsDrawing(true)
     setLastPoint(pt)
     setStartPoint(pt)
     if (tool !== 'pen' && tool !== 'eraser') {
@@ -206,10 +208,6 @@ const Modal = ({ open, onClose, onSave, userName, onChangeUserName }: ModalProps
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={() => {
-                if (!isDrawing) {
-                  onClose()
-                  return
-                } 
                 if (!canvasRef.current || !onSave) return
                 try {
                   const src = canvasRef.current
