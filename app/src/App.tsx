@@ -8,7 +8,7 @@ import Modal from './components/Modal'
 import useImage from 'use-image'
 
 export default function App() {
-  const room = useMemo(() => getQueryParam('room', 'public-1'), [])
+  const room = useMemo(() => getQueryParam('room', 'public-2'), [])
   const [fishImage] = useImage('/fish.png')
 
   const [userName, setUserName] = useState(
@@ -245,7 +245,7 @@ export default function App() {
 
     const handleUpdate = (event: Y.YArrayEvent<Fish>) => {
       const arrSnap = fishArray.toArray()
-      
+
       // Remove duplicate users by ID - keep the latest one
       const uniqueFishes = new Map<string, Fish>()
       for (const fish of arrSnap) {
@@ -253,7 +253,7 @@ export default function App() {
           uniqueFishes.set(fish.id, fish)
         }
       }
-      
+
       // Update the array with unique fishes
       const uniqueFishArray = Array.from(uniqueFishes.values())
       if (uniqueFishArray.length !== arrSnap.length) {
@@ -261,7 +261,7 @@ export default function App() {
         fishArray.insert(0, uniqueFishArray)
         return
       }
-      
+
       setFishes(uniqueFishArray)
 
       const ids = new Set(uniqueFishArray.map(f => f.id))
@@ -416,7 +416,7 @@ export default function App() {
       doc.transact(() => {
         const arr = fishArray
         const list = arr.toArray()
-        
+
         // Remove duplicate users by ID - keep the latest one
         const uniqueFishes = new Map<string, Fish>()
         for (const fish of list) {
@@ -424,21 +424,21 @@ export default function App() {
             uniqueFishes.set(fish.id, fish)
           }
         }
-        
+
         // Update the array with unique fishes if duplicates found
         const uniqueFishArray = Array.from(uniqueFishes.values())
         if (uniqueFishArray.length !== list.length) {
           arr.delete(0, list.length)
           arr.insert(0, uniqueFishArray)
         }
-        
+
         const storedId = getStoredFishId()
         if (storedId) {
           const idx = uniqueFishArray.findIndex(f => f.id === storedId)
           if (idx >= 0) {
             myFishIdRef.current = storedId
             const cur = uniqueFishArray[idx]
-            
+
             const existingState = renderStateRef.current.get(cur.id)
             if (!existingState) {
               const swimmingStyle = cur.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
@@ -463,12 +463,12 @@ export default function App() {
                 sensingRange: cur.sensingRange || 80 + Math.random() * 60,
                 foodSeekingTimer: cur.foodSeekingTimer || Math.random() * 200 + 100
               })
-            renderStateInitializedRef.current.add(cur.id)
+              renderStateInitializedRef.current.add(cur.id)
             }
             const currentState = renderStateRef.current.get(cur.id)
-            const desired = { 
-              ...cur, 
-              owner: userName, 
+            const desired = {
+              ...cur,
+              owner: userName,
               color: myColor,
               x: currentState?.x ?? cur.x,
               y: currentState?.y ?? cur.y,
@@ -534,7 +534,7 @@ export default function App() {
             foodSeekingTimer: Math.random() * 200 + 100
           }
           arr.push([newFish])
-          
+
           renderStateRef.current.set(id, {
             x: startX,
             y: startY,
@@ -567,7 +567,7 @@ export default function App() {
           const keep = uniqueFishArray[keepIdx]
           myFishIdRef.current = keep.id
           setStoredFishId(keep.id)
-          
+
           const existingState = renderStateRef.current.get(keep.id)
           if (!existingState) {
             const swimmingStyle = keep.swimmingStyle || ['normal', 'fast', 'slow', 'erratic'][Math.floor(Math.random() * 4)] as 'normal' | 'fast' | 'slow' | 'erratic'
@@ -596,9 +596,9 @@ export default function App() {
           }
           if (keep.owner !== userName || keep.color !== myColor) {
             const currentState = renderStateRef.current.get(keep.id)
-            const next = { 
-              ...keep, 
-              owner: userName, 
+            const next = {
+              ...keep,
+              owner: userName,
               color: myColor,
               x: currentState?.x ?? keep.x,
               y: currentState?.y ?? keep.y,
@@ -698,7 +698,7 @@ export default function App() {
     const arr = fishArrayRef.current
     if (!arr) return
     const items = arr.toArray()
-    
+
     // Remove duplicate users by ID - keep the latest one
     const uniqueFishes = new Map<string, Fish>()
     for (const fish of items) {
@@ -706,14 +706,14 @@ export default function App() {
         uniqueFishes.set(fish.id, fish)
       }
     }
-    
+
     // Update the array with unique fishes if duplicates found
     const uniqueFishArray = Array.from(uniqueFishes.values())
     if (uniqueFishArray.length !== items.length) {
       arr.delete(0, items.length)
       arr.insert(0, uniqueFishArray)
     }
-    
+
     const myId = myFishIdRef.current || getStoredFishId()
     if (myId) {
       for (let i = 0; i < uniqueFishArray.length; i++) {
@@ -721,8 +721,8 @@ export default function App() {
           const cur = uniqueFishArray[i]
           if (cur.owner !== userName) {
             const currentState = renderStateRef.current.get(cur.id)
-            const next = { 
-              ...cur, 
+            const next = {
+              ...cur,
               owner: userName,
               x: currentState?.x ?? cur.x,
               y: currentState?.y ?? cur.y,
@@ -867,23 +867,23 @@ export default function App() {
         // Food attraction logic
         if (foodAttraction && food && foodSeekingTimer <= 0) {
           const distanceToFood = Math.sqrt(Math.pow(x - food.x, 2) + Math.pow(y - food.y, 2))
-          
+
           if (distanceToFood <= sensingRange) {
             // Calculate direction to food
             const angleToFood = Math.atan2(food.y - y, food.x - x)
             const attractionStrength = Math.max(0.1, 1 - (distanceToFood / sensingRange))
-            
+
             // Blend current direction with food direction
             const currentAngle = Math.atan2(dy, dx)
             const blendAngle = currentAngle + (angleToFood - currentAngle) * attractionStrength * 0.3
-            
+
             // Update target direction
             targetDx = Math.cos(blendAngle) * baseSpeed
             targetDy = Math.sin(blendAngle) * baseSpeed
-            
+
             // Increase speed when seeking food
             currentSpeed *= (1 + attractionStrength * 0.4)
-            
+
             // Reset food seeking timer
             foodSeekingTimer = 60 + Math.random() * 120
           } else {
@@ -922,7 +922,7 @@ export default function App() {
         const naturalVariation = 0.9 + 0.2 * Math.sin(swimPhase * 1.5)
         const randomVariation = 1 + (Math.random() - 0.5) * styleVariation
         const boostVariation = 1 + Math.sin(swimPhase * 2) * speedVariation * 0.3
-        
+
         currentSpeed = baseSpeed * styleMultiplier * naturalVariation * randomVariation * boostVariation
 
         x += dx * currentSpeed + waveOffsetX
@@ -956,7 +956,7 @@ export default function App() {
 
         const prevState = local.get(f.id)
         const maxJumpDistance = 50
-        
+
         if (prevState && Math.sqrt(Math.pow(x - prevState.x, 2) + Math.pow(y - prevState.y, 2)) > maxJumpDistance) {
           x = prevState.x + dx * currentSpeed
           y = prevState.y + dy * currentSpeed
@@ -1015,7 +1015,7 @@ export default function App() {
             next.speedVariation !== f.speedVariation || next.speedBoostTimer !== f.speedBoostTimer ||
             next.swimmingStyle !== f.swimmingStyle || next.foodAttraction !== f.foodAttraction ||
             next.sensingRange !== f.sensingRange || next.foodSeekingTimer !== f.foodSeekingTimer
-          
+
           if (positionChanged || movementChanged) {
             arr.delete(i, 1)
             arr.insert(i, [next])
