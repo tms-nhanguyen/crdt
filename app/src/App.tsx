@@ -8,7 +8,7 @@ import Modal from './components/Modal'
 import useImage from 'use-image'
 
 export default function App() {
-  const room = useMemo(() => getQueryParam('room', 'public-2'), [])
+  const room = useMemo(() => getQueryParam('room', 'public222'), [])
   const [fishImage] = useImage('/fish.png')
 
   const [userName, setUserName] = useState(
